@@ -49,30 +49,19 @@ impl IntegratedCompletionEngine {
         let Some(definition) = db.get_command("git") else {
             return Some(Cow::Borrowed(current_dir));
         };
-        let mut redirect_target = false;
-        let mut words = source.words[..source.cursor_word]
-            .iter()
-            .skip(source.command_word + 1)
-            .filter(|word| {
-                if redirect_target {
-                    redirect_target = false;
-                    false
-                } else if parser::CommandLineParser::is_redirect_operator(&word.raw) {
-                    redirect_target = true;
-                    false
-                } else {
-                    true
-                }
-            });
+        let mut words = source
+            .argv()
+            .take_while(|(i, _)| *i < source.cursor_word)
+            .map(|(_, word)| word);
         let mut directory = Cow::Borrowed(current_dir);
         while let Some(word) = words.next() {
-            let option = decode_literal_word(&word.raw);
+            let option = decode_literal_word(word);
             if let Some(attached_path) = option.strip_prefix("-C") {
                 let (path, home_expansion) = if attached_path.is_empty() {
                     let Some(value) = words.next() else { break };
                     (
-                        decode_literal_word(&value.raw),
-                        value.raw == "~" || value.raw.starts_with("~/"),
+                        decode_literal_word(value),
+                        value == "~" || value.starts_with("~/"),
                     )
                 } else {
                     (attached_path.to_string(), false)
@@ -92,7 +81,7 @@ impl IntegratedCompletionEngine {
                 .iter()
                 .find(|o| o.matches_name(&option))
             {
-                if option.expects_value() {
+                if option.takes_separate_value() {
                     words.next();
                 }
             } else if option.starts_with('-') {

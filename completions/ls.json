@@ -1,15 +1,14 @@
 {
   "command": "ls",
+  "short_option_clusters": "aAdFhilRrSst",
   "description": "List directory contents",
   "global_options": [
     {
       "long": "--help",
-      "short": "-?",
       "description": "Display help information"
     },
     {
       "long": "--version",
-      "short": "-V",
       "description": "Display version information"
     },
     {
@@ -48,7 +47,6 @@
       "description": "Print the index number of each file"
     },
     {
-      "long": "--long",
       "short": "-l",
       "description": "Use a long listing format"
     },
@@ -67,13 +65,30 @@
       "description": "Reverse order while sorting"
     },
     {
+      "short": "-s",
       "long": "--size",
+      "description": "Print the allocated size of each file"
+    },
+    {
       "short": "-S",
       "description": "Sort by file size, largest first"
     },
     {
       "long": "--sort",
-      "description": "Sort by WORD instead of name: none (-U), size (-S), time (-t), version (-v), extension (-X)"
+      "description": "Sort by WORD instead of name: none (-U), size (-S), time (-t), version (-v), extension (-X)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "name",
+          "none",
+          "size",
+          "time",
+          "version",
+          "extension",
+          "width"
+        ]
+      }
     },
     {
       "short": "-X",
@@ -81,6 +96,19 @@
     },
     {
       "long": "--time",
+      "description": "Select the timestamp to display or sort by",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "atime",
+          "ctime",
+          "mtime",
+          "birth"
+        ]
+      }
+    },
+    {
       "short": "-t",
       "description": "Sort by modification time, newest first"
     },
@@ -90,10 +118,23 @@
     },
     {
       "long": "--time-style",
-      "description": "Time/date format with -l; see TIME_STYLE in `ls --help`"
+      "description": "Time/date format with -l; see TIME_STYLE in `ls --help`",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "full-iso",
+          "long-iso",
+          "iso",
+          "locale"
+        ]
+      }
     },
     {
       "long": "--color",
+      "value_attached_only": true,
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["always", "auto", "never"] },
       "description": "Colorize the output; WHEN can be 'always' (default if omitted), 'auto', or 'never'"
     }
   ],

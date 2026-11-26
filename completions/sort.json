@@ -1,5 +1,6 @@
 {
   "command": "sort",
+  "short_option_clusters": "bcdfikmnorstu",
   "description": "Sort lines of text files",
   "global_options": [
     {
@@ -19,6 +20,7 @@
     },
     {
       "short": "-k",
+      "multiple": true,
       "long": "--key",
       "description": "Sort via a key; KEYDEF gives location and type",
       "takes_value": true,

@@ -309,11 +309,20 @@ impl<'a> ArgumentGenerator<'a> {
             ArgumentType::Directory => {
                 FileSystemGenerator::directory_candidates(&parsed.current_token, self.filesystem)
             }
-            ArgumentType::Choice(choices) => Ok(choices
-                .iter()
-                .filter(|choice| fuzzy_match_score(choice, &query).is_some())
-                .map(|choice| CompletionCandidate::argument(choice.clone(), None))
-                .collect()),
+            ArgumentType::Choice(choices) => {
+                let has_prefix = choices.iter().any(|choice| choice.starts_with(&query));
+                Ok(choices
+                    .iter()
+                    .filter(|choice| {
+                        if has_prefix {
+                            choice.starts_with(&query)
+                        } else {
+                            fuzzy_match_score(choice, &query).is_some()
+                        }
+                    })
+                    .map(|choice| CompletionCandidate::argument(choice.clone(), None))
+                    .collect())
+            }
             ArgumentType::Command => self.generate_system_command_candidates(&query),
             ArgumentType::Environment => {
                 let mut candidates = Vec::with_capacity(32);
@@ -385,6 +394,7 @@ mod tests {
     fn db_with_argument_type(arg_type: Option<ArgumentType>) -> CommandCompletionDatabase {
         let mut db = CommandCompletionDatabase::new();
         db.add_command(CommandCompletion {
+            short_option_clusters: None,
             command: "cmd".to_string(),
             description: None,
             global_options: vec![],

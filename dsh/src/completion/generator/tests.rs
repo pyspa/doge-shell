@@ -14,6 +14,7 @@ fn create_test_database() -> CommandCompletionDatabase {
     let mut db = CommandCompletionDatabase::new();
 
     let git_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "git".to_string(),
         description: Some("Git version control".to_string()),
         global_options: vec![],
@@ -96,6 +97,7 @@ fn test_recursive_command_correction() {
 
     // Define 'pacman' with '-S' subcommand
     let pacman_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "pacman".to_string(),
         description: None,
         global_options: vec![],
@@ -113,6 +115,7 @@ fn test_recursive_command_correction() {
 
     // Define 'sudo' which takes a command as argument
     let sudo_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "sudo".to_string(),
         description: None,
         global_options: vec![],
@@ -199,6 +202,7 @@ fn test_recursive_command_correction() {
         short: None,
         long: Some("--unique-flag".to_string()),
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -221,6 +225,7 @@ fn test_recursive_command_correction() {
 fn test_partial_subcommand_is_not_reclassified_as_argument() {
     let mut db = CommandCompletionDatabase::new();
     let docker_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "docker".to_string(),
         description: None,
         global_options: vec![],
@@ -263,6 +268,7 @@ fn test_partial_subcommand_is_not_reclassified_as_argument() {
 fn test_nested_subcommand_completion_after_space_and_short_prefix() {
     let mut db = CommandCompletionDatabase::new();
     let docker_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "docker".to_string(),
         description: None,
         global_options: vec![],
@@ -324,6 +330,7 @@ fn test_nested_subcommand_completion_after_space_and_short_prefix() {
 fn test_short_and_long_options_generated_for_single_dash() {
     let mut db = CommandCompletionDatabase::new();
     let git_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "git".to_string(),
         description: None,
         global_options: vec![],
@@ -337,6 +344,7 @@ fn test_short_and_long_options_generated_for_single_dash() {
                     short: Some("-m".to_string()),
                     long: Some("--message".to_string()),
                     description: None,
+                    value_attached_only: false,
                     takes_value: false,
                     value_type: None,
                     argument: None,
@@ -346,6 +354,7 @@ fn test_short_and_long_options_generated_for_single_dash() {
                     short: Some("-a".to_string()),
                     long: Some("--all".to_string()),
                     description: None,
+                    value_attached_only: false,
                     takes_value: false,
                     value_type: None,
                     argument: None,
@@ -431,6 +440,7 @@ fn file_candidates_expand_directory_with_trailing_separator() {
 fn test_git_add_completion_options_with_single_dash() {
     let mut db = CommandCompletionDatabase::new();
     let git_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "git".to_string(),
         description: None,
         global_options: vec![],
@@ -444,6 +454,7 @@ fn test_git_add_completion_options_with_single_dash() {
                     short: Some("-A".to_string()),
                     long: Some("--all".to_string()),
                     description: None,
+                    value_attached_only: false,
                     takes_value: false,
                     value_type: None,
                     argument: None,
@@ -453,6 +464,7 @@ fn test_git_add_completion_options_with_single_dash() {
                     short: Some("-u".to_string()),
                     long: Some("--update".to_string()),
                     description: None,
+                    value_attached_only: false,
                     takes_value: false,
                     value_type: None,
                     argument: None,
@@ -511,6 +523,7 @@ fn directory_candidates_expand_directory_with_trailing_separator() {
 fn test_cd_completion_logic() {
     let mut db = CommandCompletionDatabase::new();
     let cd_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "cd".to_string(),
         description: Some("Change directory".to_string()),
         subcommands: vec![],
@@ -578,6 +591,7 @@ fn test_subcommand_and_file_completion() {
     // Setup: Command with subcommand and an argument
     let mut db = CommandCompletionDatabase::new();
     let git_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "git".to_string(),
         description: Some("Git version control".to_string()),
         global_options: vec![],
@@ -657,6 +671,7 @@ fn test_subcommand_and_file_completion() {
 fn test_subcommand_and_file_completion_empty_token() {
     let mut db = CommandCompletionDatabase::new();
     let mycmd_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "mycmd".to_string(),
         description: None,
         global_options: vec![],
@@ -709,6 +724,7 @@ fn test_subcommand_and_file_completion_empty_token() {
 fn test_script_execution() {
     let mut db = CommandCompletionDatabase::new();
     let script_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "scriptcmd".to_string(),
         description: None,
         subcommands: vec![],
@@ -760,6 +776,7 @@ fn dynamic_argument_resolved_from_json_does_not_fallback_to_files() {
 
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "dynarg".to_string(),
         description: None,
         subcommands: vec![],
@@ -806,6 +823,7 @@ fn test_script_execution_variable_substitution() {
     let mut db = CommandCompletionDatabase::new();
     // We use printf to avoid newline issues and control output exactly
     let script_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "substcmd".to_string(),
         description: None,
         subcommands: vec![],
@@ -855,6 +873,7 @@ fn test_script_execution_variable_substitution() {
     // Let's create a passing test case
     let mut db2 = CommandCompletionDatabase::new();
     let script_completion2 = CommandCompletion {
+        short_option_clusters: None,
         command: "substcmd2".to_string(),
         description: None,
         subcommands: vec![],
@@ -884,6 +903,7 @@ fn test_script_execution_variable_substitution() {
 fn test_option_completion_guard() {
     let mut db = CommandCompletionDatabase::new();
     let mycmd_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "mycmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -891,6 +911,7 @@ fn test_option_completion_guard() {
             short: Some("-o".to_string()),
             long: Some("--option".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: false,
             value_type: None,
             argument: None,
@@ -959,6 +980,7 @@ fn test_option_completion_guard() {
 fn subcommand_option_value_uses_value_type_choice() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "cargo".to_string(),
         description: None,
         global_options: vec![],
@@ -971,6 +993,7 @@ fn subcommand_option_value_uses_value_type_choice() {
                 short: Some("-p".to_string()),
                 long: Some("--package".to_string()),
                 description: Some("Package to test".to_string()),
+                value_attached_only: false,
                 takes_value: true,
                 value_type: Some(ArgumentType::Choice(vec![
                     "doge-shell".to_string(),
@@ -1000,6 +1023,7 @@ fn subcommand_option_value_uses_value_type_choice() {
 fn subcommand_option_value_uses_value_type_script() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "git".to_string(),
         description: None,
         global_options: vec![],
@@ -1012,6 +1036,7 @@ fn subcommand_option_value_uses_value_type_script() {
                 short: Some("-s".to_string()),
                 long: Some("--source".to_string()),
                 description: Some("Restore source".to_string()),
+                value_attached_only: false,
                 takes_value: true,
                 value_type: Some(ArgumentType::Script(
                     "printf 'main\\nfeature\\n'".to_string(),
@@ -1041,6 +1066,7 @@ fn subcommand_option_value_uses_value_type_script() {
 fn subcommand_alias_uses_canonical_argument_scope() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "pacman".to_string(),
         description: None,
         global_options: vec![],
@@ -1079,6 +1105,7 @@ fn create_complex_test_database() -> CommandCompletionDatabase {
     let mut db = CommandCompletionDatabase::new();
 
     let git_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "git".to_string(),
         description: Some("Git version control".to_string()),
         global_options: vec![],
@@ -1246,6 +1273,7 @@ fn test_argument_correction_unit() {
 
     let mut db = CommandCompletionDatabase::new();
     let git_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "git".to_string(),
         description: Some("Git".to_string()),
         global_options: vec![],
@@ -1355,6 +1383,7 @@ fn test_unknown_command_completion() {
 fn test_multiple_argument_reuses_last_definition() {
     let mut db = CommandCompletionDatabase::new();
     let multi_arg_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "pkgcmd".to_string(),
         description: None,
         subcommands: vec![],
@@ -1401,6 +1430,7 @@ fn test_multiple_argument_reuses_last_definition() {
 fn test_non_multiple_argument_does_not_reuse_last_definition() {
     let mut db = CommandCompletionDatabase::new();
     let single_arg_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "singlepkg".to_string(),
         description: None,
         subcommands: vec![],
@@ -1447,6 +1477,7 @@ fn test_non_multiple_argument_does_not_reuse_last_definition() {
 fn test_multiple_script_argument_reuses_last_definition() {
     let mut db = CommandCompletionDatabase::new();
     let multi_arg_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "scriptcmd".to_string(),
         description: None,
         subcommands: vec![],

@@ -1,5 +1,6 @@
 {
   "command": "cut",
+  "short_option_clusters": "bcdfns",
   "description": "Remove sections from each line of files",
   "global_options": [
     {

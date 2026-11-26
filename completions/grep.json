@@ -1,5 +1,6 @@
 {
   "command": "grep",
+  "short_option_clusters": true,
   "description": "Print lines that match patterns",
   "global_options": [
     {

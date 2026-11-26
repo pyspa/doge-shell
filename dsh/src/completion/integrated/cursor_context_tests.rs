@@ -22,6 +22,227 @@ fn parsed(e: &IntegratedCompletionEngine, marked: &str) -> ParsedCommandLine {
     let cursor = marked[..marked.find('§').unwrap()].chars().count();
     e.convert_to_parsed_command_line(&marked.replace('§', ""), cursor)
 }
+
+#[tokio::test]
+async fn short_flag_clusters_offer_valid_extensions_and_track_used_flags() {
+    let e = engine();
+    for json in [
+        include_str!("../../../../completions/ls.json"),
+        include_str!("../../../../completions/grep.json"),
+        include_str!("../../../../completions/curl.json"),
+        include_str!("../../../../completions/fd.json"),
+        include_str!("../../../../completions/rg.json"),
+        include_str!("../../../../completions/sort.json"),
+        include_str!("../../../../completions/cut.json"),
+        include_str!("../../../../completions/uniq.json"),
+        include_str!("../../../../completions/tar.json"),
+        include_str!("../../../../completions/nohup.json"),
+    ] {
+        e.command_completion
+            .lock()
+            .add_command(serde_json::from_str(json).unwrap());
+    }
+    let cwd = tempfile::tempdir().unwrap();
+    for (marked, expected, excluded, replaced) in [
+        ("ls -la§", "-lah", "-laa", "-la"),
+        ("ls -R§", "-Rh", "-RX", "-R"),
+        ("cut -f1 -s§", "-sd", "-sz", "-s"),
+        ("uniq --group -i§", "-if", "-ii", "-i"),
+        ("uniq --all-repeated -i§", "-if", "-ii", "-i"),
+        ("uniq --group=pre§", "prepend", "separate", "pre"),
+        ("uniq --group=pnd§", "prepend", "both", "pnd"),
+        ("ls --color=au§", "auto", "--color", "au"),
+        ("sudo grep -in§ tail", "-inf", "-ini", "-in"),
+        ("curl -s§", "-sL", "-ss", "-s"),
+        ("grep -in --§", "--recursive", "--line-number", "--"),
+        ("grep -infvv --§", "--invert-match", "--line-number", "--"),
+        ("grep -e -in --§", "--line-number", "--", "--"),
+        ("rg -u§", "-uu", "-u-", "-u"),
+        ("rg -g'*.rs' --gl§", "--glob", "--ignore-case", "--gl"),
+        ("sort -k2 -n§", "-nk", "-nn", "-n"),
+        ("tar -Cdir -v§", "-vC", "-v-", "-v"),
+        ("nohup grep -in§", "-inw", "-ini", "-in"),
+        ("fd -Hca§", "auto", "-Hcai", "a"),
+        ("ls --sort=ext§", "extension", "--sort", "ext"),
+        ("go build -v§", "-v", "-va", "-v"),
+    ] {
+        let input = marked.replace('§', "");
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let result = e.complete(&input, cursor, cwd.path(), 256, None).await;
+        assert!(
+            result.candidates.iter().any(|c| c.text == expected),
+            "{marked}: {result:?}"
+        );
+        assert!(
+            !result.candidates.iter().any(|c| c.text == excluded),
+            "{marked}: {result:?}"
+        );
+        let range = result.replacement_range.unwrap();
+        assert_eq!(
+            slice_chars(&input, range.start, range.end),
+            replaced,
+            "{marked}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn required_file_values_can_start_with_a_dash() {
+    let e = engine();
+    for json in [
+        include_str!("../../../../completions/grep.json"),
+        include_str!("../../../../completions/tar.json"),
+        include_str!("../../../../completions/curl.json"),
+    ] {
+        e.command_completion
+            .lock()
+            .add_command(serde_json::from_str(json).unwrap());
+    }
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("-input"), "").unwrap();
+    for (input, option) in [
+        ("grep -f -i", "-f"),
+        ("tar -xvf -i", "-f"),
+        ("curl -o >log -i", "-o"),
+    ] {
+        let parsed = e.convert_to_parsed_command_line(input, input.len());
+        assert!(
+            matches!(&parsed.completion_context, CompletionContext::OptionValue {option_name, ..} if option_name == option),
+            "{input}: {parsed:?}"
+        );
+        let result = e.complete(input, input.len(), cwd.path(), 80, None).await;
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|c| c.text.trim_start_matches("./") == "-input"),
+            "{input}: {result:?}"
+        );
+        assert!(
+            !result
+                .candidates
+                .iter()
+                .any(|c| c.candidate_type == CandidateType::ShortOption),
+            "{input}: {result:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn declared_single_dash_names_complete_the_whole_option() {
+    let e = engine();
+    e.command_completion.lock().add_command(
+        serde_json::from_str(include_str!("../../../../completions/ffmpeg.json")).unwrap(),
+    );
+    let cwd = tempfile::tempdir().unwrap();
+    for (marked, expected, replaced) in [
+        ("go build -r§", "-race", "-r"),
+        ("ffmpeg -v§", "-version", "-v"),
+        ("ffmpeg -ver§sion -y", "-version", "-version"),
+        ("ffmpeg -c:§", "-c:v", "-c:"),
+        ("ffmpeg -vn§", "-vn", "-vn"),
+        ("sudo ffmpeg -logl§", "-loglevel", "-logl"),
+        ("ffmpeg -loglevel wa§", "warning", "wa"),
+        ("go test -r§", "-run", "-r"),
+    ] {
+        let input = marked.replace('§', "");
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let result = e.complete(&input, cursor, cwd.path(), 100, None).await;
+        assert!(
+            result.candidates.iter().any(|c| c.text == expected),
+            "{marked}: {result:?}"
+        );
+        let range = result.replacement_range.unwrap();
+        assert_eq!(
+            slice_chars(&input, range.start, range.end),
+            replaced,
+            "{marked}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn declared_short_flags_keep_the_archive_value_and_following_operand_distinct() {
+    let e = engine();
+    e.command_completion.lock().add_command(
+        serde_json::from_str(include_str!("../../../../completions/tar.json")).unwrap(),
+    );
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("sample.tar"), "").unwrap();
+    for (marked, completed) in [
+        ("tar -xvfsa§mple", "tar -xvfsample.tar"),
+        ("sudo tar -xvf sa§mple", "sudo tar -xvf sample.tar"),
+        ("tar -xvf >log sa§", "tar -xvf >log sample.tar"),
+        ("echo 日 && tar -xfsa§", "echo 日 && tar -xfsample.tar"),
+    ] {
+        let p = parsed(&e, marked);
+        assert!(
+            matches!(e.dynamic_provider_target(&p).completion_context,
+            CompletionContext::OptionValue { ref option_name, .. } if option_name == "-f"),
+            "{marked}: {p:?}"
+        );
+        let input = marked.replace('§', "");
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let result = e.complete(&input, cursor, cwd.path(), 100, None).await;
+        assert!(
+            result.candidates.iter().any(|c| c.text == "sample.tar"),
+            "{marked}: {result:?}"
+        );
+        let range = result.replacement_range.unwrap();
+        assert_eq!(
+            replace_char_range(&input, range.start, range.end, "sample.tar"),
+            completed
+        );
+    }
+    for marked in [
+        "tar -xvf sample.tar me§mber",
+        "tar -xvfsample.tar me§mber",
+        "tar -xv me§mber",
+    ] {
+        let p = parsed(&e, marked);
+        assert!(
+            matches!(
+                p.completion_context,
+                CompletionContext::Argument { arg_index: 0, .. }
+            ),
+            "{marked}: {p:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn declared_valueless_flag_leaves_wrapped_command_name_completable() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = engine();
+    e.command_completion.lock().add_command(
+        serde_json::from_str(include_str!("../../../../completions/nohup.json")).unwrap(),
+    );
+    let bin = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let executable = bin.path().join("probe-tool");
+    std::fs::write(&executable, "").unwrap();
+    std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    e.environment.write().variable_state.paths = vec![bin.path().display().to_string()];
+    for marked in [
+        "sudo -n probe-§",
+        "sudo -u root -n probe-§tool tail",
+        "nohup probe-§",
+    ] {
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let input = marked.replace('§', "");
+        let result = e.complete(&input, cursor, cwd.path(), 100, None).await;
+        assert!(
+            result.candidates.iter().any(|c| c.text == "probe-tool"),
+            "{marked}: {result:?}"
+        );
+    }
+    let inline = parsed(&e, "sudo --custom=probe-§");
+    assert!(matches!(
+        inline.completion_context,
+        CompletionContext::OptionValue { .. }
+    ));
+}
+
 #[tokio::test]
 async fn cache_does_not_cross_subcommand_boundary() {
     let e = engine();

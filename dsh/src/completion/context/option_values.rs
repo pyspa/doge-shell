@@ -3,6 +3,109 @@
 //! list once the option's own value has been accounted for.
 use super::*;
 
+/// The option that determines how an argv word ends. For a short-option
+/// cluster this is the first value-taking flag, or the final boolean flag.
+pub(crate) struct OptionWord<'opt, 'raw> {
+    name: &'opt str,
+    option: &'opt CommandOption,
+    attached: Option<&'raw str>,
+}
+
+impl<'opt, 'raw> OptionWord<'opt, 'raw> {
+    pub(super) fn parse(raw: &'raw str, options: &[&'opt CommandOption]) -> Option<Self> {
+        Self::visit(raw, options, |_| {})
+    }
+
+    /// Visit each declared spelling up to the first flag that owns a value.
+    pub(crate) fn visit(
+        raw: &'raw str,
+        options: &[&'opt CommandOption],
+        mut record: impl FnMut(&'opt str),
+    ) -> Option<Self> {
+        let (name, attached) =
+            split_inline_long_option(raw).map_or((raw, None), |(name, value)| (name, Some(value)));
+        let name = super::super::shell_path::decode_literal_word(name);
+        if !name.starts_with(['-', '+']) {
+            return None;
+        }
+        let mut exact = None;
+        for option in options {
+            if let Some(spelling) = option
+                .short
+                .iter()
+                .chain(&option.long)
+                .find(|s| **s == name)
+            {
+                exact = Some(Self {
+                    name: spelling,
+                    option,
+                    attached,
+                });
+                // A subcommand may add a value to a global flag spelling.
+                // Preserve the first declared value type in the active scope.
+                if option.expects_value() {
+                    break;
+                }
+            }
+        }
+        if let Some(word) = exact {
+            record(word.name);
+            return Some(word);
+        }
+
+        // Exact names like ffmpeg's "-codec" win over "-c" with a value.
+        // Read unquoted ASCII flags, keeping the value in raw source coordinates.
+        let mut flags = raw.strip_prefix('-')?;
+        if flags.starts_with('-') {
+            return None;
+        }
+        while let Some((flag, rest)) = flags.split_at_checked(1) {
+            let (option, name) = options.iter().find_map(|option| {
+                let name = option.short.as_deref()?;
+                (name.strip_prefix('-') == Some(flag)).then_some((*option, name))
+            })?;
+            record(name);
+            if rest.is_empty() || option.expects_value() {
+                if rest.starts_with('=') {
+                    return None;
+                }
+                return Some(Self {
+                    name,
+                    option,
+                    attached: (!rest.is_empty()).then_some(rest),
+                });
+            }
+            flags = rest;
+        }
+        None
+    }
+
+    pub(crate) fn takes_separate_value(&self) -> bool {
+        self.attached.is_none() && self.option.takes_separate_value()
+    }
+
+    pub(crate) fn can_extend_cluster(&self) -> bool {
+        !self.option.expects_value() && self.attached.is_none() && self.name.len() == 2
+    }
+
+    // pacman's operation letter is a subcommand (e.g. -Q in -Qb), so
+    // ordinary short-option lookup alone cannot recognize these path values.
+    fn for_cursor(raw: &'raw str, options: &[&'opt CommandOption], command: &str) -> Option<Self> {
+        Self::parse(raw, options).or_else(|| {
+            if command != "pacman" {
+                return None;
+            }
+            let (name, path) = pacman_short_path(raw)?;
+            let option = options.iter().find(|opt| opt.matches_name(name))?;
+            Some(Self {
+                name,
+                option,
+                attached: (!path.is_empty()).then_some(path),
+            })
+        })
+    }
+}
+
 impl ContextCorrector<'_> {
     pub(super) fn positional_arguments_after_raw_index(
         parsed: &ParsedCommandLine,
@@ -38,24 +141,17 @@ impl ContextCorrector<'_> {
                 index += 2;
                 continue;
             }
-            if !end_options && super::super::shell_path::decode_literal_word(token) == "--" {
+            let logical = super::super::shell_path::decode_literal_word(token);
+            if !end_options && logical == "--" {
                 end_options = true;
                 index += 1;
                 continue;
             }
-            if !end_options
-                && (Self::is_inline_long_option_value(token, options)
-                    || split_attached_short_option_value(token, options).is_some())
-            {
+            if !end_options && let Some(word) = OptionWord::parse(&logical, options) {
                 index += 1;
-                continue;
-            }
-            if !end_options && is_separate_value_option(token, options) {
-                index = Self::next_argv_index(&parsed.raw_args, index + 1) + 1;
-                continue;
-            }
-            if !end_options && Self::looks_like_known_option(token, options) {
-                index += 1;
+                if word.takes_separate_value() {
+                    index = Self::next_argv_index(&parsed.raw_args, index) + 1;
+                }
                 continue;
             }
             // env assignments precede the wrapped command. Inspect spelling
@@ -85,99 +181,85 @@ impl ContextCorrector<'_> {
     ) -> Option<ParsedCommandLine> {
         let options = self.collect_available_options(command_completion, &parsed.subcommand_path);
         let current = Self::current_raw_index(parsed).unwrap_or(parsed.raw_args.len());
-        if parsed
-            .raw_args
-            .iter()
-            .take(current)
-            .any(|token| super::super::shell_path::decode_literal_word(token) == "--")
-        {
-            return None;
-        }
-
-        if let Some(raw_token) = Self::current_raw_token(parsed)
-            && let Some((option_name, value)) = split_inline_long_option(raw_token)
-        {
-            let option_name = super::super::shell_path::decode_literal_word(option_name);
-            let mut corrected = parsed.clone();
-            corrected.current_token = value.to_string();
-            corrected.current_arg = Some(corrected.current_token.clone());
-
-            if let Some(option) = options
-                .iter()
-                .find(|option| option.matches_name(&option_name))
-            {
-                if option.expects_value() {
+        let mut index = Self::next_argv_index(&parsed.raw_args, 0);
+        while index < current {
+            let token = super::super::shell_path::decode_literal_word(parsed.raw_args.get(index)?);
+            if token == "--" {
+                return None;
+            }
+            index = Self::next_argv_index(&parsed.raw_args, index + 1);
+            let Some(word) = OptionWord::for_cursor(&token, &options, &parsed.command) else {
+                continue;
+            };
+            if word.takes_separate_value() {
+                if index == current {
+                    let mut corrected = parsed.clone();
+                    if let Some(raw) = Self::current_raw_token(parsed) {
+                        corrected.current_token = raw.to_owned();
+                        corrected.current_arg = Some(raw.to_owned());
+                    }
                     corrected.completion_context = CompletionContext::OptionValue {
-                        option_name: option_name.to_string(),
-                        value_type: option.value_type().cloned(),
+                        option_name: word.name.to_owned(),
+                        value_type: word.option.value_type().cloned(),
                     };
-                    corrected.specified_options = normalize_specified_option(
-                        &corrected.specified_options,
-                        raw_token,
-                        &option_name,
-                    );
-                    corrected.options = corrected.specified_options.clone();
+                    Self::remove_current_value_from_arguments(&mut corrected);
                     return Some(corrected);
                 }
-
-                corrected.current_token = raw_token.to_string();
-                corrected.current_arg = Some(corrected.current_token.clone());
-                corrected.completion_context = CompletionContext::LongOption;
+                index = Self::next_argv_index(&parsed.raw_args, index + 1);
+            } else if index == current
+                && word.option.value_attached_only
+                && matches!(&parsed.completion_context, CompletionContext::OptionValue { option_name, .. } if option_name == word.name)
+                && Self::current_raw_token(parsed) == Some(parsed.current_token.as_str())
+            {
+                let mut corrected = parsed.clone();
+                let (_, arg_index) =
+                    Self::positional_arguments_after_raw_index(parsed, 0, &options);
+                corrected.completion_context = CompletionContext::Argument {
+                    arg_index,
+                    arg_type: None,
+                };
                 return Some(corrected);
             }
         }
 
-        if let Some(raw_token) = Self::current_raw_token(parsed)
-            && let Some((option_name, value_type, value)) =
-                split_attached_short_option_value(raw_token, &options).or_else(|| {
-                    if parsed.command != "pacman" {
-                        return None;
-                    }
-                    let (name, value) = pacman_short_path(raw_token)?;
-                    if value.is_empty() {
-                        return None;
-                    }
-                    let opt = options.iter().find(|opt| opt.matches_name(name))?;
-                    Some((name.to_owned(), opt.value_type().cloned(), value))
-                })
+        if let Some(raw) = Self::current_raw_token(parsed)
+            && let Some(word) = OptionWord::for_cursor(raw, &options, &parsed.command)
+            && let Some(value) = word.attached
         {
+            if !word.option.expects_value() {
+                let mut corrected = parsed.clone();
+                corrected.current_token = raw.to_owned();
+                corrected.current_arg = Some(raw.to_owned());
+                corrected.completion_context = CompletionContext::LongOption;
+                return Some(corrected);
+            }
+
+            // While editing, "-ver" can still become ffmpeg's "-version".
+            if !word.name.starts_with("--") {
+                let prefix = super::super::shell_path::decode_literal_word(raw);
+                if options.iter().any(|opt| {
+                    opt.short
+                        .iter()
+                        .chain(&opt.long)
+                        .any(|s| s.starts_with(&prefix))
+                }) {
+                    return None;
+                }
+            }
             let mut corrected = parsed.clone();
-            corrected.current_token = value.to_string();
-            corrected.current_arg = Some(corrected.current_token.clone());
+            corrected.current_token = value.to_owned();
+            corrected.current_arg = Some(value.to_owned());
             corrected.completion_context = CompletionContext::OptionValue {
-                option_name: option_name.clone(),
-                value_type,
+                option_name: word.name.to_owned(),
+                value_type: word.option.value_type().cloned(),
             };
             corrected.specified_options =
-                normalize_specified_option(&corrected.specified_options, raw_token, &option_name);
+                normalize_specified_option(&corrected.specified_options, raw, word.name);
             corrected.options = corrected.specified_options.clone();
             return Some(corrected);
         }
 
-        if parsed.current_token.starts_with('-') {
-            return None;
-        }
-
-        let previous =
-            super::super::shell_path::decode_literal_word(Self::previous_argv_token(parsed)?);
-        let previous = if parsed.command == "pacman" {
-            pacman_short_path(&previous)
-                .filter(|(_, attached)| attached.is_empty())
-                .map_or(previous.as_str(), |(name, _)| name)
-        } else {
-            &previous
-        };
-        let option = options
-            .into_iter()
-            .find(|option| option.matches_name(previous) && option.expects_value())?;
-
-        let mut corrected = parsed.clone();
-        corrected.completion_context = CompletionContext::OptionValue {
-            option_name: previous.to_string(),
-            value_type: option.value_type().cloned(),
-        };
-        Self::remove_current_value_from_arguments(&mut corrected);
-        Some(corrected)
+        None
     }
 
     pub(super) fn remove_known_option_values_from_arguments(
@@ -234,29 +316,17 @@ impl ContextCorrector<'_> {
                 continue;
             }
 
-            if !end_of_options && Self::is_inline_long_option_value(token, options) {
+            if !end_of_options && let Some(word) = OptionWord::parse(token, options) {
                 raw_index += 1;
-                continue;
-            }
-
-            if !end_of_options && split_attached_short_option_value(token, options).is_some() {
-                raw_index += 1;
-                continue;
-            }
-
-            if !end_of_options
-                && is_separate_value_option(token, options)
-                && let Some(value) = parsed.raw_args.get(raw_index + 1)
-                && !Self::looks_like_known_option(value, options)
-            {
-                if parsed
-                    .specified_arguments
-                    .get(specified_index)
-                    .is_some_and(|argument| argument == value)
+                if word.takes_separate_value()
+                    && let Some(value) = parsed.raw_args.get(raw_index)
+                    && OptionWord::parse(value, options).is_none()
                 {
-                    specified_index += 1;
+                    if parsed.specified_arguments.get(specified_index) == Some(value) {
+                        specified_index += 1;
+                    }
+                    raw_index += 1;
                 }
-                raw_index += 2;
                 continue;
             }
 

@@ -15,6 +15,14 @@
       "type": ["string", "null"],
       "description": "A brief description of the command"
     },
+    "short_option_clusters": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "string", "pattern": "^[A-Za-z0-9]+$" }
+      ],
+      "default": false,
+      "description": "Offer additional one-letter short options on an existing cluster. A string restricts suggestions to the listed letters, for example when GNU and BSD utilities differ."
+    },
     "global_options": {
       "type": "array",
       "description": "Options that apply to the command globally",
@@ -68,6 +76,11 @@
           "type": "boolean",
           "description": "Whether this option takes a value",
           "default": false
+        },
+        "value_attached_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "An optional value must be attached to this option. The following word is a separate argument."
         },
         "required": {
           "type": "boolean",

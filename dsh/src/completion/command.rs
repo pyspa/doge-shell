@@ -6,6 +6,10 @@ use std::collections::HashMap;
 pub struct CommandCompletion {
     /// Command name (e.g., "git", "cargo", "docker")
     pub command: String,
+    /// Offer additional short flags on the same word when this CLI accepts clusters.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_option_clusters: Option<ShortOptionClusters>,
     /// Command description
     pub description: Option<String>,
     /// List of subcommands
@@ -17,6 +21,27 @@ pub struct CommandCompletion {
     /// Arguments that this command accepts (for top-level commands)
     #[serde(default)]
     pub arguments: Vec<Argument>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ShortOptionClusters {
+    All(bool),
+    Letters(String),
+}
+
+impl ShortOptionClusters {
+    pub(super) fn enabled(&self) -> bool {
+        !matches!(self, Self::All(false))
+    }
+
+    pub(super) fn allows(&self, letter: char) -> bool {
+        letter.is_ascii_alphanumeric()
+            && match self {
+                Self::All(all) => *all,
+                Self::Letters(letters) => letters.contains(letter),
+            }
+    }
 }
 
 /// Subcommand definition
@@ -52,6 +77,9 @@ pub struct CommandOption {
     /// Whether this option expects a following value.
     #[serde(default)]
     pub takes_value: bool,
+    /// An optional value belongs to the option word and never consumes the next argument.
+    #[serde(default)]
+    pub value_attached_only: bool,
     /// Whether this option may be specified more than once (JSON `multiple`).
     #[serde(default)]
     pub multiple: bool,
@@ -77,6 +105,10 @@ impl CommandOption {
 
     pub fn expects_value(&self) -> bool {
         self.argument.is_some() || self.value_type.is_some() || self.takes_value
+    }
+
+    pub(super) fn takes_separate_value(&self) -> bool {
+        self.expects_value() && !self.value_attached_only
     }
 }
 
@@ -295,6 +327,7 @@ mod tests {
         assert_eq!(db.len(), 0);
 
         let git_completion = CommandCompletion {
+            short_option_clusters: None,
             command: "git".to_string(),
             description: Some("Git version control system".to_string()),
             subcommands: vec![],

@@ -1,5 +1,6 @@
 {
   "command": "uniq",
+  "short_option_clusters": "cduifs",
   "description": "Report or omit repeated lines",
   "global_options": [
     {
@@ -54,6 +55,7 @@
     },
     {
       "long": "--all-repeated",
+      "value_attached_only": true,
       "description": "Like -D, but allow separating groups",
       "takes_value": true,
       "value_type": {
@@ -63,6 +65,7 @@
     },
     {
       "long": "--group",
+      "value_attached_only": true,
       "description": "Show all items, separating groups with an empty line",
       "takes_value": true,
       "value_type": {

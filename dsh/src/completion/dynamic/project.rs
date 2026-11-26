@@ -10,7 +10,7 @@ use super::{
     archive_file_candidates, canonicalize_path, dedup_sorted, format_ssh_host_candidate_text,
     format_task_description, load_man_page_names, load_ssh_hosts, man_page_roots, matches_prefix,
     run_command_lines, selected_tar_archive, selected_unzip_archive, shell_state_candidates,
-    ssh_config_scope, tar_reads_archive,
+    ssh_config_scope,
 };
 use crate::completion::parser::{CompletionContext, ParsedCommandLine};
 use dsh_builtin::task;
@@ -314,9 +314,7 @@ impl DynamicCompletionProvider {
     ) -> Vec<EnhancedCandidate> {
         let command_name = parsed_command_line.command.as_str();
         let archive = match command_name {
-            "tar" if tar_reads_archive(parsed_command_line) => {
-                selected_tar_archive(parsed_command_line, current_dir)
-            }
+            "tar" => selected_tar_archive(parsed_command_line, current_dir),
             "unzip" => selected_unzip_archive(parsed_command_line, current_dir),
             _ => None,
         };

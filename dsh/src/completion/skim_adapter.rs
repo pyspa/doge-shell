@@ -156,7 +156,8 @@ impl SkimItem for Candidate {
         match candidate_preview(self) {
             PreviewSpec::Command(cmd) => ItemPreview::Command(cmd),
             PreviewSpec::Text(text) => ItemPreview::Text(display_text(&text).into_owned()),
-            PreviewSpec::None => ItemPreview::Global,
+            // Skim executes the global preview via sh, even when the command is empty.
+            PreviewSpec::None => ItemPreview::Text(String::new()),
         }
     }
 }
@@ -196,6 +197,22 @@ pub fn replace_space(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::completion::framework::CompletionSelection;
+
+    #[test]
+    fn choices_without_descriptions_render_a_static_empty_preview() {
+        let context = PreviewContext {
+            query: "",
+            cmd_query: "",
+            width: 30,
+            height: 10,
+            current_index: 0,
+            current_selection: "prepend",
+            selected_indices: &[],
+            selections: &[],
+        };
+        let preview = Candidate::Basic("prepend".into()).preview(context);
+        assert!(matches!(preview, ItemPreview::Text(text) if text.is_empty()));
+    }
 
     #[test]
     fn preview_for_file_uses_bat_with_quoted_path() {

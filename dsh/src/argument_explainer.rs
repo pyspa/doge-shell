@@ -182,6 +182,7 @@ mod tests {
                     short: Some("-a".to_string()),
                     long: Some("--all".to_string()),
                     description: Some("Stage all modified files".to_string()),
+                    value_attached_only: false,
                     takes_value: false,
                     value_type: None,
                     argument: None,
@@ -191,6 +192,7 @@ mod tests {
                     short: Some("-m".to_string()),
                     long: Some("--message".to_string()),
                     description: Some("Commit message".to_string()),
+                    value_attached_only: false,
                     takes_value: false,
                     value_type: None,
                     argument: None,
@@ -201,6 +203,7 @@ mod tests {
         };
 
         let git = CommandCompletion {
+            short_option_clusters: None,
             command: "git".to_string(),
             description: Some("Version control".to_string()),
             subcommands: vec![commit],
@@ -209,6 +212,7 @@ mod tests {
                 short: Some("-v".to_string()),
                 long: Some("--version".to_string()),
                 description: Some("Show version".to_string()),
+                value_attached_only: false,
                 takes_value: false,
                 value_type: None,
                 argument: None,

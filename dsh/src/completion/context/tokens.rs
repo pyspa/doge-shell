@@ -1,32 +1,8 @@
-//! The small questions the corrector asks about one token -- is it an inline
-//! long-option value, a known option, a redirect operator -- plus the accessors
-//! for the raw token under and before the cursor, the option/subcommand lookup
-//! they share, and the inner-command reparse for wrappers like `sudo`.
+//! Cursor and argv indexing, redirect recognition, subcommand lookup and
+//! source-preserving reparsing of wrapped commands.
 use super::*;
 
 impl ContextCorrector<'_> {
-    pub(super) fn is_inline_long_option_value(token: &str, options: &[&CommandOption]) -> bool {
-        if let Some((option_name, _)) = split_inline_long_option(token) {
-            return options.iter().any(|option| {
-                option.matches_name(&super::super::shell_path::decode_literal_word(option_name))
-                    && option.expects_value()
-            });
-        }
-        false
-    }
-
-    pub(super) fn looks_like_known_option(token: &str, options: &[&CommandOption]) -> bool {
-        if let Some((option_name, _)) = split_inline_long_option(token) {
-            return options.iter().any(|option| {
-                option.matches_name(&super::super::shell_path::decode_literal_word(option_name))
-            });
-        }
-
-        options.iter().any(|option| {
-            option.matches_name(&super::super::shell_path::decode_literal_word(token))
-        }) || split_attached_short_option_value(token, options).is_some()
-    }
-
     pub(super) fn is_redirect_operator(token: &str) -> bool {
         CommandLineParser::is_redirect_operator(token)
     }
@@ -41,17 +17,6 @@ impl ContextCorrector<'_> {
             index += 2;
         }
         index.min(args.len())
-    }
-
-    pub(super) fn previous_argv_token(parsed: &ParsedCommandLine) -> Option<&str> {
-        let current = Self::current_raw_index(parsed)?;
-        let mut index = Self::next_argv_index(&parsed.raw_args, 0);
-        let mut previous = None;
-        while index < current {
-            previous = parsed.raw_args.get(index).map(String::as_str);
-            index = Self::next_argv_index(&parsed.raw_args, index + 1);
-        }
-        previous
     }
 
     pub(super) fn remove_current_value_from_arguments(parsed: &mut ParsedCommandLine) {

@@ -567,22 +567,39 @@ fn modprobe_removal_is_recognised_bundled_and_long() {
 fn archive_helpers_find_read_archive_without_treating_create_as_read() {
     let dir = Path::new("/work");
 
-    let tar = parsed("tar -xzf backup.tar.gz etc/");
-    assert!(tar_reads_archive(&tar));
+    for input in [
+        "tar -xzf backup.tar.gz etc/",
+        "tar -xzfbackup.tar.gz etc/",
+        "tar -fbackup.tar.gz -t etc/",
+        "tar -xzf >log backup.tar.gz etc/",
+        "tar xfz backup.tar.gz etc/",
+        "tar -tPf backup.tar.gz etc/",
+        "tar -tSf backup.tar.gz etc/",
+        "tar -twf backup.tar.gz etc/",
+        "tar -t -T -c -f backup.tar.gz etc/",
+        "tar '-tf' backup.tar.gz '--' -c etc/",
+        "tar -tf backup.tar.gz '--' -c etc/",
+        "tar --extract --file=backup.tar.gz member",
+    ] {
+        assert_eq!(
+            selected_tar_archive(&parsed(input), dir),
+            Some(dir.join("backup.tar.gz")),
+            "{input}"
+        );
+    }
+    let middle = "tar --list member >log --file='my archive.tar'";
+    let line = CommandLineParser::new().parse(middle, middle.find("mber").unwrap());
     assert_eq!(
-        selected_tar_archive(&tar, dir),
-        Some(dir.join("backup.tar.gz"))
+        selected_tar_archive(&line, dir),
+        Some(dir.join("my archive.tar"))
     );
-
-    let tar = parsed("tar --extract --file=backup.tar member");
-    assert!(tar_reads_archive(&tar));
-    assert_eq!(
-        selected_tar_archive(&tar, dir),
-        Some(dir.join("backup.tar"))
-    );
-
-    let tar = parsed("tar -cf backup.tar src/");
-    assert!(!tar_reads_archive(&tar));
+    for input in [
+        "tar -cf backup.tar src/",
+        "tar -cftext.tar src/",
+        "tar -ftext.tar -- -x ",
+    ] {
+        assert_eq!(selected_tar_archive(&parsed(input), dir), None, "{input}");
+    }
 
     let unzip = parsed("unzip backup.zip etc/");
     assert_eq!(

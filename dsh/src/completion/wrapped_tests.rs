@@ -12,6 +12,7 @@ mod tests {
 
         // Register 'sudo' with CommandWithArgs
         let sudo_completion = CommandCompletion {
+            short_option_clusters: None,
             command: "sudo".to_string(),
             description: Some("Execute command as another user".to_string()),
             global_options: vec![],
@@ -27,6 +28,7 @@ mod tests {
 
         // Register 'git' as a sample wrapped command
         let git_completion = CommandCompletion {
+            short_option_clusters: None,
             command: "git".to_string(),
             description: Some("Git version control".to_string()),
             global_options: vec![],
@@ -49,6 +51,7 @@ mod tests {
                             short: Some("-m".to_string()),
                             long: Some("--message".to_string()),
                             description: None,
+                            value_attached_only: false,
                             takes_value: false,
                             value_type: None,
                             argument: None,
@@ -58,6 +61,7 @@ mod tests {
                             short: Some("-a".to_string()),
                             long: Some("--all".to_string()),
                             description: None,
+                            value_attached_only: false,
                             takes_value: false,
                             value_type: None,
                             argument: None,

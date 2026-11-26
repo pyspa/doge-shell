@@ -1,3 +1,7 @@
+//! Command, subcommand and option definitions loaded from completion JSON.
+//! The lookup helpers resolve aliases and option visibility along a command path.
+//! The database holds these definitions for completion and inline explanations.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,6 +25,61 @@ pub struct CommandCompletion {
     /// Arguments that this command accepts (for top-level commands)
     #[serde(default)]
     pub arguments: Vec<Argument>,
+}
+
+impl CommandCompletion {
+    /// Top-level definitions visible at this point in the command line.
+    pub(crate) fn visible_top_level_options(
+        &self,
+        path: &[String],
+    ) -> impl Iterator<Item = &CommandOption> {
+        let at_root = path.is_empty();
+        self.global_options
+            .iter()
+            .filter(move |opt| at_root || opt.inherit != Some(false))
+    }
+
+    pub(crate) fn subcommands_on_path<'db>(
+        &'db self,
+        path: &[String],
+    ) -> impl Iterator<Item = &'db SubCommand> {
+        let mut children = &self.subcommands;
+        path.iter().map_while(move |name| {
+            let sub = children.iter().find(|s| s.matches(name))?;
+            children = &sub.subcommands;
+            Some(sub)
+        })
+    }
+
+    pub(super) fn has_scoped_options_on_path(&self, path: &[String]) -> bool {
+        self.global_options.iter().any(|opt| opt.inherit.is_some())
+            || self
+                .subcommands_on_path(path)
+                .any(|sub| sub.options.iter().any(|opt| opt.inherit.is_some()))
+    }
+
+    /// Options used to interpret argv, including inherited options along the path.
+    pub(crate) fn options_for_path(&self, path: &[String]) -> Vec<&CommandOption> {
+        self.collect_options(path, true)
+    }
+
+    pub(super) fn option_candidates_for_path(&self, path: &[String]) -> Vec<&CommandOption> {
+        self.collect_options(path, false)
+    }
+
+    fn collect_options(
+        &self,
+        path: &[String],
+        include_legacy_parents: bool,
+    ) -> Vec<&CommandOption> {
+        let mut options: Vec<_> = self.visible_top_level_options(path).collect();
+        for (depth, sub) in self.subcommands_on_path(path).enumerate() {
+            options.extend(sub.options.iter().filter(|opt| {
+                depth + 1 == path.len() || opt.inherit.unwrap_or(include_legacy_parents)
+            }));
+        }
+        options
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +124,12 @@ pub struct SubCommand {
     pub subcommands: Vec<SubCommand>,
 }
 
+impl SubCommand {
+    pub(super) fn matches(&self, name: &str) -> bool {
+        self.name == name || self.aliases.iter().any(|alias| alias == name)
+    }
+}
+
 /// Option definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandOption {
@@ -74,6 +139,9 @@ pub struct CommandOption {
     pub long: Option<String>,
     /// Option description
     pub description: Option<String>,
+    /// Explicit visibility in descendants; omission preserves legacy completion definitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherit: Option<bool>,
     /// Whether this option expects a following value.
     #[serde(default)]
     pub takes_value: bool,

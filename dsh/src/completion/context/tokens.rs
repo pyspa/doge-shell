@@ -98,21 +98,7 @@ impl ContextCorrector<'_> {
         command_completion: &'b CommandCompletion,
         subcommand_path: &[String],
     ) -> Vec<&'b CommandOption> {
-        let mut options = Vec::new();
-        options.extend(&command_completion.global_options);
-
-        let mut current_subcommands = &command_completion.subcommands;
-        for subcommand_name in subcommand_path {
-            let Some(subcommand) =
-                Self::find_matching_subcommand(current_subcommands, subcommand_name)
-            else {
-                break;
-            };
-            options.extend(&subcommand.options);
-            current_subcommands = &subcommand.subcommands;
-        }
-
-        options
+        command_completion.options_for_path(subcommand_path)
     }
 
     pub(super) fn find_matching_subcommand<'b>(

@@ -10,7 +10,7 @@ use super::parser::{
 };
 
 mod option_values;
-pub(super) use option_values::OptionWord;
+pub(super) use option_values::{OptionWord, scan_scoped_options};
 mod pacman;
 pub(crate) use pacman::pacman_short_path;
 mod tokens;
@@ -66,6 +66,7 @@ impl<'a> ContextCorrector<'a> {
             return target;
         }
         let mut corrected = self.correct_inner(parsed);
+        self.correct_literal_option_terminator(&mut corrected);
         // A lexical guess such as "sudo -n VALUE" can point at the wrapper's
         // command operand. Use its declared argv position once flags and their
         // values have been accounted for.

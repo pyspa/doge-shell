@@ -5,8 +5,17 @@
     {
       "name": "show",
       "description": "Show installed toolchains",
+      "options": [
+        { "short": "-v", "long": "--verbose", "inherit": false, "description": "Include rustc information for installed toolchains" }
+      ],
       "subcommands": [
-        { "name": "active-toolchain", "description": "Show active toolchain" },
+        {
+          "name": "active-toolchain",
+          "description": "Show active toolchain",
+          "options": [
+            { "short": "-v", "long": "--verbose", "description": "Include rustc information" }
+          ]
+        },
         { "name": "home", "description": "Show rustup home" },
         { "name": "profile", "description": "Show current profile" }
       ]
@@ -30,7 +39,14 @@
       "name": "toolchain",
       "description": "Manage toolchains",
       "subcommands": [
-        { "name": "list", "description": "List installed toolchains" },
+        {
+          "name": "list",
+          "description": "List installed toolchains",
+          "options": [
+            { "short": "-v", "long": "--verbose", "description": "Include toolchain information" },
+            { "short": "-q", "long": "--quiet", "description": "Use a single output column" }
+          ]
+        },
         { "name": "install", "description": "Install a toolchain" },
         {
           "name": "uninstall",
@@ -49,19 +65,32 @@
     {
       "name": "target",
       "description": "Manage targets",
-      "options": [
-        {
-          "long": "--toolchain",
-          "description": "Toolchain to operate on",
-          "takes_value": true,
-          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
-        }
-      ],
       "subcommands": [
-        { "name": "list", "description": "List available targets" },
+        {
+          "name": "list",
+          "description": "List available targets",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            },
+            { "long": "--installed", "description": "List only installed targets" },
+            { "short": "-q", "long": "--quiet", "description": "Use a single output column" }
+          ]
+        },
         {
           "name": "add",
           "description": "Add a target",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            }
+          ],
           "arguments": [
             {
               "name": "target",
@@ -74,6 +103,14 @@
         {
           "name": "remove",
           "description": "Remove a target",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            }
+          ],
           "arguments": [
             {
               "name": "target",
@@ -88,25 +125,38 @@
     {
       "name": "component",
       "description": "Manage components",
-      "options": [
-        {
-          "long": "--toolchain",
-          "description": "Toolchain to operate on",
-          "takes_value": true,
-          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
-        },
-        {
-          "long": "--target",
-          "description": "Target triple the component applies to",
-          "takes_value": true,
-          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
-        }
-      ],
       "subcommands": [
-        { "name": "list", "description": "List components" },
+        {
+          "name": "list",
+          "description": "List components",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            },
+            { "long": "--installed", "description": "List only installed components" },
+            { "short": "-q", "long": "--quiet", "description": "Use a single output column" }
+          ]
+        },
         {
           "name": "add",
           "description": "Add a component",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            },
+            {
+              "long": "--target",
+              "description": "Target triple the component applies to",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
+            }
+          ],
           "arguments": [
             {
               "name": "component",
@@ -119,6 +169,20 @@
         {
           "name": "remove",
           "description": "Remove a component",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            },
+            {
+              "long": "--target",
+              "description": "Target triple the component applies to",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
+            }
+          ],
           "arguments": [
             {
               "name": "component",
@@ -176,9 +240,9 @@
     { "name": "check", "description": "Check for updates" }
   ],
   "global_options": [
-    { "short": "-v", "long": "--verbose", "description": "Verbose output" },
-    { "short": "-q", "long": "--quiet", "description": "Quiet output" },
     { "short": "-h", "long": "--help", "description": "Show help" },
-    { "short": "-V", "long": "--version", "description": "Show version" }
+    { "short": "-v", "long": "--verbose", "inherit": false, "description": "Verbose output" },
+    { "short": "-q", "long": "--quiet", "inherit": false, "description": "Quiet output" },
+    { "short": "-V", "long": "--version", "inherit": false, "description": "Show version" }
   ]
 }

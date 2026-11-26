@@ -125,6 +125,7 @@
       "options": [
         {
           "long": "--include-ref",
+          "inherit": true,
           "description": "Include the given ref",
           "takes_value": true,
           "multiple": true,
@@ -137,6 +138,7 @@
         },
         {
           "long": "--exclude-ref",
+          "inherit": true,
           "description": "Exclude the given ref",
           "takes_value": true,
           "multiple": true,
@@ -149,6 +151,7 @@
         },
         {
           "long": "--everything",
+          "inherit": true,
           "description": "Migrate every local ref"
         }
       ]

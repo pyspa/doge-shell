@@ -88,10 +88,12 @@ fn validate_options_array(value: &Value, path: &str) -> Result<()> {
         {
             bail!("{option_path}.long has invalid option format '{long}'");
         }
-        if let Some(takes_value) = obj.get("takes_value")
-            && !takes_value.is_boolean()
-        {
-            bail!("{option_path}.takes_value must be boolean");
+        for key in ["takes_value", "inherit"] {
+            if let Some(value) = obj.get(key)
+                && !value.is_boolean()
+            {
+                bail!("{option_path}.{key} must be boolean");
+            }
         }
         if let Some(value_type) = obj.get("value_type") {
             validate_argument_type(value_type, &format!("{option_path}.value_type"))?;

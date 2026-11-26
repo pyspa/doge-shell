@@ -389,6 +389,14 @@ mod tests {
     }
 
     #[test]
+    fn local_option_scope_requires_a_boolean() {
+        let invalid = r#"{"command":"foo","global_options":[{"long":"--mode","inherit":"yes"}]}"#;
+        assert!(validate_completion_json(invalid, "foo").is_err());
+        let valid = r#"{"command":"foo","global_options":[{"long":"--mode","inherit":false}]}"#;
+        assert!(validate_completion_json(valid, "foo").is_ok());
+    }
+
+    #[test]
     fn validate_completion_aligns_runtime_option_formats() {
         let json = r#"
         {

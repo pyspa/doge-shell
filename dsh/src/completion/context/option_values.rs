@@ -13,14 +13,14 @@ pub(crate) struct OptionWord<'opt, 'raw> {
 
 impl<'opt, 'raw> OptionWord<'opt, 'raw> {
     pub(super) fn parse(raw: &'raw str, options: &[&'opt CommandOption]) -> Option<Self> {
-        Self::visit(raw, options, |_| {})
+        Self::visit(raw, options, |_, _| {})
     }
 
     /// Visit each declared spelling up to the first flag that owns a value.
     pub(crate) fn visit(
         raw: &'raw str,
         options: &[&'opt CommandOption],
-        mut record: impl FnMut(&'opt str),
+        mut record: impl FnMut(&'opt CommandOption, &'opt str),
     ) -> Option<Self> {
         let (name, attached) =
             split_inline_long_option(raw).map_or((raw, None), |(name, value)| (name, Some(value)));
@@ -49,7 +49,7 @@ impl<'opt, 'raw> OptionWord<'opt, 'raw> {
             }
         }
         if let Some(word) = exact {
-            record(word.name);
+            record(word.option, word.name);
             return Some(word);
         }
 
@@ -64,7 +64,7 @@ impl<'opt, 'raw> OptionWord<'opt, 'raw> {
                 let name = option.short.as_deref()?;
                 (name.strip_prefix('-') == Some(flag)).then_some((*option, name))
             })?;
-            record(name);
+            record(option, name);
             if rest.is_empty() || option.expects_value() {
                 if rest.starts_with('=') {
                     return None;
@@ -106,6 +106,66 @@ impl<'opt, 'raw> OptionWord<'opt, 'raw> {
     }
 }
 
+/// Declared flag occurrences retain their owner when a child reuses a parent's spelling.
+pub(crate) struct ScopedOptions<'a> {
+    pub(crate) used: Vec<(usize, &'a CommandOption, &'a str)>,
+    terminator: Option<usize>,
+    cursor_path: Vec<String>,
+    argument_word: usize,
+}
+
+pub(crate) fn scan_scoped_options<'a>(
+    definition: &'a CommandCompletion,
+    source: &super::super::command_segment::CommandSource,
+) -> ScopedOptions<'a> {
+    let mut result = ScopedOptions {
+        used: Vec::new(),
+        terminator: None,
+        cursor_path: Vec::new(),
+        argument_word: source.command_word + 1,
+    };
+    let mut cursor_depth = 0;
+    let mut path = Vec::new();
+    let mut children = definition.subcommands.as_slice();
+    let mut active = definition.options_for_path(&path);
+    let mut argv = source.argv();
+    while let Some((index, raw)) = argv.next() {
+        let logical = super::super::shell_path::decode_literal_word(raw);
+        if logical == "--" && index != source.cursor_word {
+            result.terminator = Some(index);
+            break;
+        }
+        if index != source.cursor_word
+            && let Some(child) = children.iter().find(|s| s.matches(&logical))
+        {
+            path.push(child.name.clone());
+            if index < source.cursor_word {
+                cursor_depth = path.len();
+                result.argument_word = index + 1;
+            }
+            children = &child.subcommands;
+            active = definition.options_for_path(&path);
+            continue;
+        }
+        if !logical.starts_with(['-', '+']) {
+            children = &[];
+        }
+        let before = result.used.len();
+        match OptionWord::visit(&logical, &active, |owner, name| {
+            result.used.push((index, owner, name))
+        }) {
+            Some(word) if word.takes_separate_value() => {
+                argv.next();
+            }
+            None => result.used.truncate(before),
+            _ => {}
+        }
+    }
+    path.truncate(cursor_depth);
+    result.cursor_path = path;
+    result
+}
+
 impl ContextCorrector<'_> {
     pub(super) fn positional_arguments_after_raw_index(
         parsed: &ParsedCommandLine,
@@ -132,9 +192,20 @@ impl ContextCorrector<'_> {
         start_index: usize,
         options: &[&CommandOption],
     ) -> Vec<usize> {
+        Self::scan_arguments(parsed, start_index, options, |_| {}).0
+    }
+
+    /// Classify argv using declared option arity, keeping shell redirections out
+    /// of both the positional list and the option names reported to callers.
+    fn scan_arguments(
+        parsed: &ParsedCommandLine,
+        start_index: usize,
+        options: &[&CommandOption],
+        mut record_option: impl FnMut(&str),
+    ) -> (Vec<usize>, Option<usize>) {
         let mut indices = Vec::new();
         let mut index = start_index;
-        let mut end_options = false;
+        let mut terminator = None;
         while let Some(token) = parsed.raw_args.get(index) {
             // Redirections belong to the shell, including after argv's `--`.
             if Self::is_redirect_operator(token) {
@@ -142,17 +213,22 @@ impl ContextCorrector<'_> {
                 continue;
             }
             let logical = super::super::shell_path::decode_literal_word(token);
-            if !end_options && logical == "--" {
-                end_options = true;
+            if terminator.is_none() && logical == "--" {
+                terminator = Some(index);
                 index += 1;
                 continue;
             }
-            if !end_options && let Some(word) = OptionWord::parse(&logical, options) {
-                index += 1;
-                if word.takes_separate_value() {
-                    index = Self::next_argv_index(&parsed.raw_args, index) + 1;
+            if terminator.is_none() {
+                if logical.starts_with('-') {
+                    record_option(token);
                 }
-                continue;
+                if let Some(word) = OptionWord::parse(&logical, options) {
+                    index += 1;
+                    if word.takes_separate_value() {
+                        index = Self::next_argv_index(&parsed.raw_args, index) + 1;
+                    }
+                    continue;
+                }
             }
             // env assignments precede the wrapped command. Inspect spelling
             // only: never evaluate a value or apply its environment/cwd changes.
@@ -171,7 +247,70 @@ impl ContextCorrector<'_> {
             indices.push(index);
             index += 1;
         }
-        indices
+        (indices, terminator)
+    }
+
+    pub(super) fn correct_literal_option_terminator(&self, parsed: &mut ParsedCommandLine) {
+        let Some(current) = Self::current_raw_index(parsed) else {
+            return;
+        };
+        let Some(first_marker) = parsed.raw_args.iter().position(|raw| {
+            raw == "--"
+                || (raw.contains(['\'', '"', '\\'])
+                    && super::super::shell_path::decode_literal_word(raw) == "--")
+        }) else {
+            return;
+        };
+        let Some(definition) = self.database.get_command(&parsed.command) else {
+            return;
+        };
+        let options = self.collect_available_options(definition, &parsed.subcommand_path);
+        let mut specified = Vec::new();
+        let (_, mut terminator) = Self::scan_arguments(parsed, 0, &options, |raw| {
+            let name = split_inline_long_option(raw).map_or(raw, |(name, _)| name);
+            specified.push(super::super::shell_path::decode_literal_word(name));
+        });
+        if let Some(source) = &parsed.source
+            && definition.has_scoped_options_on_path(&parsed.subcommand_path)
+        {
+            let scoped = scan_scoped_options(definition, source);
+            let raw_start = source.words.len().saturating_sub(parsed.raw_args.len());
+            terminator = scoped
+                .terminator
+                .and_then(|index| index.checked_sub(raw_start));
+            specified = scoped
+                .used
+                .into_iter()
+                .map(|(_, _, name)| name.to_owned())
+                .collect();
+        }
+        if terminator == Some(first_marker) {
+            return;
+        }
+        // A value such as grep -e -- or the target in > -- is not the end
+        // of options. Restore the option list as well as the cursor's role.
+        if let CompletionContext::OptionValue { option_name, .. } = &parsed.completion_context
+            && let Some(raw) = Self::current_raw_token(parsed)
+            && raw != parsed.current_token
+        {
+            specified = normalize_specified_option(&specified, raw, option_name);
+        }
+        parsed.options = specified.clone();
+        parsed.specified_options = specified;
+        if first_marker < current
+            && terminator.is_none_or(|end| current <= end)
+            && matches!(
+                parsed.completion_context,
+                CompletionContext::Argument { .. }
+            )
+            && let Some((context, token)) =
+                Self::current_raw_token(parsed).and_then(super::super::parser::option_context)
+        {
+            let token = token.to_owned();
+            parsed.current_arg = Some(token.clone());
+            parsed.current_token = token;
+            parsed.completion_context = context;
+        }
     }
 
     pub(super) fn correct_option_value_context(
@@ -181,7 +320,24 @@ impl ContextCorrector<'_> {
     ) -> Option<ParsedCommandLine> {
         let options = self.collect_available_options(command_completion, &parsed.subcommand_path);
         let current = Self::current_raw_index(parsed).unwrap_or(parsed.raw_args.len());
-        let mut index = Self::next_argv_index(&parsed.raw_args, 0);
+        let mut start = 0;
+        if let Some(source) = &parsed.source
+            && command_completion.has_scoped_options_on_path(&parsed.subcommand_path)
+        {
+            let scoped = scan_scoped_options(command_completion, source);
+            // Let subcommand recovery finish before consulting this level's option types.
+            if scoped.cursor_path.len() != parsed.subcommand_path.len()
+                || !command_completion
+                    .subcommands_on_path(&scoped.cursor_path)
+                    .zip(&parsed.subcommand_path)
+                    .all(|(sub, name)| sub.matches(name))
+            {
+                return None;
+            }
+            let raw_start = source.words.len().saturating_sub(parsed.raw_args.len());
+            start = scoped.argument_word.saturating_sub(raw_start);
+        }
+        let mut index = Self::next_argv_index(&parsed.raw_args, start);
         while index < current {
             let token = super::super::shell_path::decode_literal_word(parsed.raw_args.get(index)?);
             if token == "--" {

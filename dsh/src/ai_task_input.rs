@@ -48,13 +48,25 @@ pub(crate) fn classify(input: &str) -> Option<Result<TaskInput<'_>, &'static str
     }
 }
 
-pub(crate) fn generative_query(input: &str) -> Option<&str> {
-    let query = input.trim_start().strip_prefix("??")?.trim();
+pub(crate) fn generative_query(input: &str, cursor: usize) -> Option<&str> {
+    let tail = input.trim_start().strip_prefix("??")?;
+    let marker_end = input.len() - tail.len();
+    if crate::completion::command_segment::char_to_byte(input, cursor) < marker_end {
+        return None;
+    }
+    let query = tail.trim();
     (!query.is_empty()).then_some(query)
 }
 
-pub(crate) fn smart_pipe_query(input: &str) -> Option<&str> {
+pub(crate) fn smart_pipe_query(input: &str, cursor: usize) -> Option<&str> {
+    // A generative prompt owns its entire query, including literal pipe markers.
+    if input.trim_start().starts_with("??") {
+        return None;
+    }
     let at = crate::completion::command_segment::smart_pipe_marker(input)?;
+    if crate::completion::command_segment::char_to_byte(input, cursor) < at + 2 {
+        return None;
+    }
     let query = input[at + 2..].trim();
     (!query.is_empty()).then_some(query)
 }
@@ -85,6 +97,23 @@ pub(crate) fn output_pipe(input: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_query_belongs_to_the_cursor_side_of_the_marker() {
+        let input = "日本語 |? summarize";
+        for cursor in [0, 4, 5] {
+            assert_eq!(smart_pipe_query(input, cursor), None);
+        }
+        for cursor in [6, 9, input.chars().count()] {
+            assert_eq!(smart_pipe_query(input, cursor), Some("summarize"));
+        }
+        let input = "  ?? explain |? literally";
+        for cursor in [0, 2, 3] {
+            assert_eq!(generative_query(input, cursor), None);
+        }
+        assert_eq!(generative_query(input, 4), Some("explain |? literally"));
+        assert_eq!(smart_pipe_query(input, input.len()), None);
+    }
 
     #[test]
     fn chat_marker_can_follow_continuations_without_changing_the_prompt() {

@@ -702,10 +702,16 @@ mod tests {
         }
         let service = Arc::new(Delayed(AtomicUsize::new(0)));
         repl.services.ai = Some(service.clone());
+        let input = "echo # 編集中\ncat |? summarize";
+        repl.input.reset(input.to_owned());
+        repl.input.move_to(8);
+        super::handle_trigger_completion(&mut repl).await.unwrap();
+        assert_eq!(service.0.load(Ordering::SeqCst), 0);
+        assert_eq!(repl.input.as_str(), input);
         for (query, expected) in [
             ("?? 日本語 query", "echo 1"),
             ("cat payload |? 日本語 query", "cat payload | echo 2"),
-            ("?? 日本語 query", "echo 3"),
+            ("?? 日本語 |? literal query", "echo 3"),
         ] {
             repl.input.reset(query.to_string());
             super::handle_trigger_completion(&mut repl).await.unwrap();
@@ -728,19 +734,27 @@ mod cursor_context_tests {
             .to_string_lossy()
             .trim_end_matches("it.txt")
             .to_string();
-        for left in ["bg > ", "bg >", "bg >>", "echo ok && bg > ", "bg -- > "] {
+        for (left, suffix) in [
+            ("bg > ", " tail"),
+            ("bg >", " tail"),
+            ("bg >>", " tail"),
+            ("echo ok && bg > ", " tail"),
+            ("bg -- > ", " tail"),
+            ("echo 日本語 > ", " |? summarize errors (if any) |& notes"),
+            ("bg > ", "; next |& broken"),
+        ] {
             let environment = Environment::new_synthetic();
             environment.write().variable_state.paths.clear();
             let mut shell = Shell::new(environment);
             let mut repl = Repl::new(&mut shell);
-            let before = format!("{left}\"{prefix}wrong\" tail");
+            let before = format!("{left}\"{prefix}wrong\"{suffix}");
             repl.input.reset(before);
             repl.input
                 .move_to(format!("{left}\"{prefix}").chars().count());
             super::handle_trigger_completion(&mut repl).await.unwrap();
             assert_eq!(
                 repl.input.as_str(),
-                format!("{left}\"{}\" tail", path.display())
+                format!("{left}\"{}\"{suffix}", path.display())
             );
         }
     }

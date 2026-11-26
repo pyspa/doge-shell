@@ -44,11 +44,22 @@ pub(crate) fn restore_cursor_position<W: Write>(repl: &Repl<'_>, out: &mut W, ex
 
 /// Move cursor relatively on the input line given previous and new display positions
 pub(crate) fn move_cursor_relative(
-    _repl: &Repl<'_>,
+    repl: &mut Repl<'_>,
     out: &mut impl Write,
     prev_pos: (usize, usize),
-    new_pos: (usize, usize),
+    previous_cursor: usize,
 ) {
+    let input = repl.input.as_str();
+    if (input.contains("|?") || input.trim_start().starts_with("??"))
+        && input_hint(input, previous_cursor) != input_hint(input, repl.input.cursor())
+    {
+        repl.terminal_ui.last_drawn_cursor_y = prev_pos.1;
+        print_input(repl, out, false, false);
+        return;
+    }
+    let new_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     let (prev_col, prev_y) = prev_pos;
     let (new_col, new_y) = new_pos;
 
@@ -414,7 +425,7 @@ pub fn print_input(
     } else {
         None
     };
-    if let Some(hint) = input_hint(&input_string) {
+    if let Some(hint) = input_hint(&input_string, repl.input.cursor()) {
         let ghost_width = ghost_suffix.as_deref().map(display_width).unwrap_or(0);
         render_hint_if_room(repl, out, hint.text(), ghost_width);
     } else if auto_fix.is_none()
@@ -545,7 +556,7 @@ fn merge_history_match_ranges(
     *color_ranges = (!merged.is_empty()).then_some(merged);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum InputHint {
     Expand,
     Analyze,
@@ -560,9 +571,9 @@ impl InputHint {
     }
 }
 
-fn input_hint(input: &str) -> Option<InputHint> {
-    if crate::ai_task_input::smart_pipe_query(input).is_some()
-        || crate::ai_task_input::generative_query(input).is_some()
+fn input_hint(input: &str, cursor: usize) -> Option<InputHint> {
+    if crate::ai_task_input::smart_pipe_query(input, cursor).is_some()
+        || crate::ai_task_input::generative_query(input, cursor).is_some()
     {
         Some(InputHint::Expand)
     } else if crate::ai_task_input::output_pipe(input).is_some() {

@@ -109,16 +109,14 @@ pub(crate) async fn handle_overtype_closing_bracket(
     repl: &mut Repl<'_>,
     _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
+    let previous_cursor = repl.input.cursor();
     let prev_pos = repl
         .input
         .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     repl.input.move_by(1);
-    let new_pos = repl
-        .input
-        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
 
     let mut renderer = TerminalRenderer::new();
-    repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
+    repl.move_cursor_relative(&mut renderer, prev_pos, previous_cursor);
     if let Err(e) = queue!(renderer, cursor::Show) {
         warn!("Failed to show cursor: {}", e);
     }

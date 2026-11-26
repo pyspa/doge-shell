@@ -145,8 +145,10 @@ pub(crate) fn command_segment_at_cursor(input: &str, cursor: usize) -> CommandSe
                 }
                 if span.end() <= cursor {
                     result.range.start = span.end();
-                } else if span.start() >= cursor && result.range.end == input.len() {
+                } else if span.start() >= cursor {
                     result.range.end = span.start();
+                    // Commands beyond this boundary cannot change the cursor's context.
+                    break;
                 }
                 has_word = false;
                 special_start = None;

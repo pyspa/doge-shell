@@ -145,7 +145,7 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn refresh_inline_suggestion(&mut self) -> bool {
-        if self.input.completion.is_some() {
+        if !self.input.cursor_at_end() || self.input.completion.is_some() {
             let had_suggestion = !self.ai_ui.suggestion_manager.candidates.is_empty();
             self.ai_ui.suggestion_manager.clear();
             return had_suggestion;

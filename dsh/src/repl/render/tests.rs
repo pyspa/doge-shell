@@ -8,6 +8,72 @@ use crate::repl::Repl;
 use crate::shell::Shell;
 
 #[tokio::test]
+async fn inline_history_skips_exact_entries_and_restores_the_suffix_at_line_end() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut shell = Shell::new(Environment::new_synthetic());
+    let mut repl = Repl::new(&mut shell);
+    let line = "echo 日本語";
+    let extension = "echo 日本語 --verbose";
+    let mut history = crate::history::History::new();
+    history
+        .write_batch(vec![(extension.into(), 1), (line.into(), 2)])
+        .unwrap();
+    repl.shell.cmd_history = Some(std::sync::Arc::new(parking_lot::Mutex::new(history)));
+    repl.input.reset(line.into());
+    // The input ends exactly at the margin. Its history suffix wraps once.
+    repl.terminal_ui.columns = repl.terminal_ui.prompt_mark_width + repl.input.display_width();
+    let mut out = Vec::new();
+    repl.print_input(&mut out, false, true);
+    let frame = String::from_utf8(out).unwrap();
+    assert!(frame[frame.find("--verbose").unwrap()..].contains("\x1b[1A"));
+    assert_eq!(repl.input.completion.as_deref(), Some(extension));
+
+    let previous = repl.input.cursor();
+    let pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
+    repl.input.move_to(5);
+    let mut out = Vec::new();
+    repl.move_cursor_relative(&mut out, pos, previous);
+    let screen = String::from_utf8(out).unwrap();
+    assert!(screen.contains("\x1b[J") && !screen.contains("--verbose"));
+    assert!(repl.input.completion.is_none());
+    // An asynchronous redraw while editing must not bring the old ghost back.
+    repl.print_input(&mut Vec::new(), false, true);
+    assert!(repl.input.completion.is_none());
+    assert!(repl.ai_ui.suggestion_manager.active.is_none());
+
+    let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+    repl.handle_key_event(&ctrl_e).await.unwrap();
+    assert_eq!(repl.input.as_str(), line);
+    assert_eq!(repl.input.cursor(), line.chars().count());
+    assert_eq!(repl.input.completion.as_deref(), Some(extension));
+    repl.handle_key_event(&ctrl_e).await.unwrap();
+    assert_eq!(repl.input.as_str(), extension);
+    assert!(repl.input.completion.is_none());
+}
+
+#[tokio::test]
+async fn inline_acceptance_rejects_a_whole_line_suffix_at_a_middle_cursor() {
+    use crate::repl::state::SuggestionAcceptMode;
+    use crate::suggestion::{SuggestionSource, SuggestionState};
+    let mut shell = Shell::new(Environment::new_synthetic());
+    let mut repl = Repl::new(&mut shell);
+    repl.input.reset("echo 界".into());
+    repl.input.move_to(2);
+    repl.ai_ui.suggestion_manager.active = Some(SuggestionState {
+        full: "echo 界 --verbose".into(),
+        source: SuggestionSource::History,
+    });
+    assert!(!repl.accept_suggestion(SuggestionAcceptMode::Word));
+    repl.input.completion = Some("echo 界 --verbose".into());
+    crate::repl::key_handlers::completion::handle_accept_completion(&mut repl);
+    assert_eq!(repl.input.as_str(), "echo 界");
+    assert_eq!(repl.input.cursor(), 2);
+}
+
+#[tokio::test]
 async fn cursor_navigation_refreshes_the_tab_expansion_hint_at_the_marker() {
     let mut shell = Shell::new(Environment::new_synthetic());
     let mut repl = Repl::new(&mut shell);

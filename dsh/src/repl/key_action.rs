@@ -295,7 +295,9 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // Move to line start/end
         (KeyCode::Char('a'), CTRL) => KeyAction::CursorToBegin,
         // Ctrl+E: Accept completion if any, otherwise move to end of line
-        (KeyCode::Char('e'), CTRL) if ctx.has_completion => KeyAction::AcceptCompletion,
+        (KeyCode::Char('e'), CTRL) if ctx.has_completion && ctx.cursor_at_end => {
+            KeyAction::AcceptCompletion
+        }
         (KeyCode::Char('e'), CTRL) => KeyAction::CursorToEnd,
 
         // Ctrl+C: Interrupt

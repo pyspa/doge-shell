@@ -442,6 +442,9 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn accept_suggestion(&mut self, mode: SuggestionAcceptMode) -> bool {
+        if !self.input.cursor_at_end() {
+            return false;
+        }
         let suggestion = match self.ai_ui.suggestion_manager.active.clone() {
             Some(state) => state,
             None => return false,

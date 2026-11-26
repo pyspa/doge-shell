@@ -157,29 +157,15 @@ async fn test_analyze_input_suffix_calculation() {
         // println!("Skipping test as Cargo.toml was not found or completion failed");
     }
 
-    // Case 2: Mid-line edit (this was the buggy case for suffix calc logic?)
-    // Actually the logic `c[input.len()..]` was the problem in `print_input`.
-    // Current logic in `analyze_input` constructs full string correctly using `split_current_pos`.
-
-    // "ls Cargo.tom -lat"
-    // Cursor after "tom"
+    // Tab can replace the word under the cursor. Inline suffixes are only
+    // offered at the end of the input, where they can be accepted.
     let input_mid = "ls Cargo.tom -lat";
     repl.input.reset(input_mid.to_string());
-    repl.input.move_to_begin();
-    // Move to after "Cargo.tom" (3 + 9 = 12)
-    repl.input.move_by(12);
-
+    repl.input.move_to("ls Cargo.tom".len());
     let analysis_mid = repl.analyze_input(input_mid, None);
-    let full_mid = analysis_mid.completion_full;
-    let suffix_mid = analysis_mid.completion;
-
-    if let Some(s) = suffix_mid {
-        assert_eq!(s, "l", "Suffix should be 'l'");
-        // Full completion should insert 'l' at cursor: "ls Cargo.toml -lat"
-        if let Some(f) = full_mid {
-            assert_eq!(f, "ls Cargo.toml -lat");
-        }
-    }
+    assert!(analysis_mid.completion_full.is_none());
+    assert!(analysis_mid.completion.is_none());
+    assert!(analysis_mid.color_ranges.is_some());
 }
 
 #[tokio::test]

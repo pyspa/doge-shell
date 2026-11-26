@@ -401,12 +401,8 @@ impl SuggestionEngine {
     ) -> Option<SuggestionState> {
         let history = history?;
         let history = history.try_lock()?;
-        let entry = history.search_first(input)?.to_string();
-        if entry.len() <= input.len() {
-            return None;
-        }
         Some(SuggestionState {
-            full: entry,
+            full: history.first_extension(input)?.to_string(),
             source: SuggestionSource::History,
         })
     }

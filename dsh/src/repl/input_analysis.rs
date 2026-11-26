@@ -19,6 +19,7 @@ pub(crate) struct InputAnalysis {
 /// Cached redraw only needs completion metadata; color ranges already live on
 /// `Input` until the input text changes.
 pub(crate) struct CachedInputAnalysis {
+    pub(crate) cursor_at_end: bool,
     pub(crate) completion_full: Option<String>,
     pub(crate) completion: Option<String>,
 }
@@ -43,8 +44,8 @@ pub(crate) fn analyze_input(
         };
     }
 
-    let filesystem = completion
-        .is_none()
+    let offer_completion = repl.input.cursor_at_end() && completion.is_none();
+    let filesystem = offer_completion
         .then(|| {
             let current_dir = repl.terminal_ui.prompt.read().current_path().to_path_buf();
             repl.completion_ui
@@ -56,7 +57,11 @@ pub(crate) fn analyze_input(
     match ShellParser::parse(Rule::commands, input) {
         Ok(pairs) => {
             // 1. Get words for completion check
-            let words = repl.input.get_words_from_pairs(pairs.clone());
+            let words = if offer_completion {
+                repl.input.get_words_from_pairs(pairs.clone())
+            } else {
+                Vec::new()
+            };
             let mut completion_full = None;
 
             for (ref rule, ref span, current) in words {
@@ -66,47 +71,42 @@ pub(crate) fn analyze_input(
                 }
 
                 match rule {
-                    Rule::argv0
-                        // Completion logic for command names
-                        if current && completion.is_none() => {
-                            if let Some(file) = repl.shell.environment.read().search_prefix(word) {
-                                // Only a strict extension of the whole line is
-                                // a completion; a bare command name for a later
-                                // list element would be a no-op accept that
-                                // shadows Ctrl+E and AI-suggestion acceptance.
-                                if file.len() > input.len() && file.starts_with(input) {
-                                    completion = Some(file[input.len()..].to_string());
-                                    completion_full = Some(file);
-                                }
-                                break;
-                            } else if let Some(filesystem) = filesystem.as_ref()
-                                && let Some(path_completion) =
-                                super::completion::complete_path_for_span(
-                                    input,
-                                    span.start(),
-                                    span.end(),
-                                    true,
-                                    filesystem,
-                                )
-                            {
-                                completion = Some(path_completion.suffix);
-                                completion_full = Some(path_completion.full);
-                                break;
+                    Rule::argv0 if current => {
+                        if let Some(file) = repl.shell.environment.read().search_prefix(word) {
+                            // Only a strict extension of the whole line is
+                            // a completion; a bare command name for a later
+                            // list element would be a no-op accept that
+                            // shadows Ctrl+E and AI-suggestion acceptance.
+                            if file.len() > input.len() && file.starts_with(input) {
+                                completion = Some(file[input.len()..].to_string());
+                                completion_full = Some(file);
                             }
+                            break;
+                        } else if let Some(filesystem) = filesystem.as_ref()
+                            && let Some(path_completion) = super::completion::complete_path_for_span(
+                                input,
+                                span.start(),
+                                span.end(),
+                                true,
+                                filesystem,
+                            )
+                        {
+                            completion = Some(path_completion.suffix);
+                            completion_full = Some(path_completion.full);
+                            break;
                         }
+                    }
                     Rule::args => {
                         // Completion logic for arguments
                         if current
-                            && completion.is_none()
                             && let Some(filesystem) = filesystem.as_ref()
-                            && let Some(path_completion) =
-                                super::completion::complete_path_for_span(
-                                    input,
-                                    span.start(),
-                                    span.end(),
-                                    false,
-                                    filesystem,
-                                )
+                            && let Some(path_completion) = super::completion::complete_path_for_span(
+                                input,
+                                span.start(),
+                                span.end(),
+                                false,
+                                filesystem,
+                            )
                         {
                             completion = Some(path_completion.suffix);
                             completion_full = Some(path_completion.full);

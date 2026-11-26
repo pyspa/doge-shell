@@ -137,19 +137,22 @@ impl History {
 
     /// Search for the first entry matching the given prefix.
     pub fn search_first(&self, word: &str) -> Option<&str> {
-        // First, check recent cache (fast path)
-        for entry in self.recent_cache.iter().rev() {
-            if entry.starts_with(word) {
-                return Some(entry);
-            }
-        }
-        // Fall back to full history search
-        for hist in self.histories.iter().rev() {
-            if hist.entry.starts_with(word) {
-                return Some(&hist.entry);
-            }
-        }
-        None
+        self.commands_by_recency()
+            .find(|entry| entry.starts_with(word))
+    }
+
+    /// Inline suggestions must add text, even if the newest match is exact.
+    pub(crate) fn first_extension(&self, input: &str) -> Option<&str> {
+        self.commands_by_recency()
+            .find(|entry| entry.len() > input.len() && entry.starts_with(input))
+    }
+
+    fn commands_by_recency(&self) -> impl Iterator<Item = &str> {
+        self.recent_cache
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .chain(self.histories.iter().rev().map(|hist| hist.entry.as_str()))
     }
 
     /// Get recent commands for context.

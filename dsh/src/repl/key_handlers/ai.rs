@@ -21,6 +21,15 @@ async fn handle_force_ai_suggestion_with_writer(
         out.flush().ok();
         return;
     }
+    if !repl.input.cursor_at_end() {
+        crate::repl::render::print_above_prompt(
+            repl,
+            out,
+            &["Move to the end of the line to request a suggestion.".into()],
+        );
+        out.flush().ok();
+        return;
+    }
     queue!(out, Print(" 🤖 Generating...\r"), cursor::Hide).ok();
     out.flush().ok();
     repl.force_ai_suggestion().await;
@@ -236,6 +245,35 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn configured_ai_suggestion_requires_the_cursor_at_line_end() {
+        let env = crate::environment::Environment::new_synthetic();
+        let mut shell = crate::shell::Shell::new(env);
+        let mut repl = Repl::new(&mut shell);
+        {
+            let mut env = repl.shell.environment.write();
+            env.set_shell_var("AI_CHAT_PROVIDER".into(), "api_key".into());
+            env.set_shell_var("AI_CHAT_BASE_URL".into(), "http://127.0.0.1:9/v1".into());
+            env.set_shell_var("AI_CHAT_ALLOW_INSECURE_HTTP".into(), "true".into());
+            env.set_shell_var("AI_CHAT_API_KEY".into(), "mock-only".into());
+        }
+        assert!(repl.ai_service().is_some());
+        repl.terminal_ui.columns = 100;
+        repl.input.reset("echo 界".into());
+        repl.input.move_to(2);
+        let mut out = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            handle_force_ai_suggestion_with_writer(&mut repl, &mut out),
+        )
+        .await
+        .unwrap();
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains("end of the line") && !output.contains("Generating"));
+        assert_eq!(repl.input.cursor(), 2);
+        assert_eq!(repl.input.as_str(), "echo 界");
+    }
 
     #[tokio::test]
     async fn unconfigured_ai_notice_redraws_input_without_generating_or_new_prompt() {

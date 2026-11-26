@@ -341,7 +341,7 @@ impl<'a> Repl<'a> {
         get_directory_listing_content(std::path::Path::new(".")).join("\n")
     }
 
-    pub(super) async fn expand_smart_pipe(&self, query: String) -> Result<Option<String>> {
+    pub(super) async fn expand_smart_pipe(&self, query: &str) -> Result<Option<String>> {
         let service = self
             .ai_service()
             .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
@@ -350,7 +350,7 @@ impl<'a> Repl<'a> {
         ai_features::await_with_progress(
             "Expanding smart pipe",
             service.as_ref(),
-            ai_features::expand_smart_pipe(service.as_ref(), &query),
+            ai_features::expand_smart_pipe(service.as_ref(), query),
         )
         .await
         .transpose()
@@ -369,16 +369,6 @@ impl<'a> Repl<'a> {
         )
         .await
         .transpose()
-    }
-
-    pub(crate) fn detect_smart_pipe(&self) -> Option<String> {
-        crate::ai_task_input::smart_pipe_query(self.input.as_str(), self.input.cursor())
-            .map(str::to_owned)
-    }
-
-    pub(crate) fn detect_generative_command(&self) -> Option<String> {
-        crate::ai_task_input::generative_query(self.input.as_str(), self.input.cursor())
-            .map(str::to_owned)
     }
 
     /// Detect AI Output Pipe pattern: `command |! "query"`
@@ -706,9 +696,10 @@ mod tests {
         let mut shell = Shell::new(environment);
         let mut repl = Repl::new(&mut shell);
 
-        repl.input.reset("ls -la | grep foo".to_string());
-        let result = repl.detect_ai_pipe();
-        assert!(result.is_none());
+        for input in ["ls -la | grep foo", "| cat |! explain"] {
+            repl.input.reset(input.to_owned());
+            assert!(repl.detect_ai_pipe().is_none(), "{input}");
+        }
     }
 
     #[tokio::test]
@@ -724,61 +715,5 @@ mod tests {
         let (command, query) = result.unwrap();
         assert_eq!(command, "kubectl get pods -n default");
         assert_eq!(query, "問題のあるPodを見つけて");
-    }
-
-    #[tokio::test]
-    async fn test_detect_smart_pipe_valid() {
-        let environment = Environment::new();
-        let mut shell = Shell::new(environment);
-        let mut repl = Repl::new(&mut shell);
-
-        repl.input.reset("ls |? filter directories".to_string());
-        let result = repl.detect_smart_pipe();
-        assert_eq!(result, Some("filter directories".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_detect_smart_pipe_no_query() {
-        let environment = Environment::new();
-        let mut shell = Shell::new(environment);
-        let mut repl = Repl::new(&mut shell);
-
-        repl.input.reset("ls |?".to_string());
-        let result = repl.detect_smart_pipe();
-        assert_eq!(result, None);
-    }
-
-    #[tokio::test]
-    async fn test_detect_smart_pipe_empty_query() {
-        let environment = Environment::new();
-        let mut shell = Shell::new(environment);
-        let mut repl = Repl::new(&mut shell);
-
-        repl.input.reset("ls |?   ".to_string());
-        let result = repl.detect_smart_pipe();
-        assert_eq!(result, None);
-    }
-
-    #[tokio::test]
-    async fn test_detect_smart_pipe_no_pattern() {
-        let environment = Environment::new();
-        let mut shell = Shell::new(environment);
-        let mut repl = Repl::new(&mut shell);
-
-        repl.input.reset("ls | grep foo".to_string());
-        let result = repl.detect_smart_pipe();
-        assert_eq!(result, None);
-    }
-
-    #[tokio::test]
-    async fn test_detect_smart_pipe_multiple_pipes() {
-        let environment = Environment::new();
-        let mut shell = Shell::new(environment);
-        let mut repl = Repl::new(&mut shell);
-
-        repl.input
-            .reset("cat file.txt | head -10 |? find errors".to_string());
-        let result = repl.detect_smart_pipe();
-        assert_eq!(result, Some("find errors".to_string()));
     }
 }

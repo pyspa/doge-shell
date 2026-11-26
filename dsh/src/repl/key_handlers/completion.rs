@@ -1,3 +1,4 @@
+use crate::ai_task_input::{TabAction, tab_action};
 use crate::completion;
 use crate::completion::integrated::{
     CompletionDisposition, CompletionReplacementRange, CompletionResult,
@@ -7,7 +8,11 @@ use crate::repl::Repl;
 use crate::repl::state::{ReplControlFlow, SuggestionAcceptMode};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
-use tracing::{debug, warn};
+use tracing::debug;
+
+#[cfg(test)]
+#[path = "completion_ai_tests.rs"]
+mod ai_tests;
 
 #[cfg(test)]
 #[path = "completion_cold_tests.rs"]
@@ -78,53 +83,76 @@ pub(crate) fn handle_cancel_completion(repl: &mut Repl<'_>) {
 
 // A cancelled wait is a handled Tab action: retain the query and do not open
 // ordinary completion. Only a completed request can replace the input.
-fn apply_ai_completion(repl: &mut Repl<'_>, expanded: Option<String>, smart_pipe: bool) {
+fn apply_ai_completion(repl: &mut Repl<'_>, expanded: Option<String>, pipe_marker: Option<usize>) {
     let Some(expanded) = expanded else { return };
-    let replacement = if smart_pipe {
-        let Some(idx) = crate::completion::command_segment::smart_pipe_marker(repl.input.as_str())
-        else {
-            return;
-        };
-        format!("{}| {expanded}", &repl.input.as_str()[..idx])
+    // If the marker is on an earlier prompt, restore the logical input to
+    // the editor before replacing it so one Undo recovers the entire query.
+    let prefix_len = repl.state.multiline_buffer.len();
+    let local_marker = if prefix_len > 0 && pipe_marker.is_none_or(|idx| idx < prefix_len) {
+        repl.input
+            .prepend_continuation(&repl.state.multiline_buffer);
+        repl.state.multiline_buffer.clear();
+        let mark = repl.terminal_ui.prompt.read().mark.clone();
+        repl.terminal_ui.prompt_mark_width = crate::input::display_width(&mark);
+        repl.terminal_ui.prompt_mark_cache = mark;
+        pipe_marker
     } else {
-        expanded
+        pipe_marker.map(|idx| idx - prefix_len)
+    };
+    let replacement = match local_marker {
+        Some(idx) => format!("{}| {expanded}", &repl.input.as_str()[..idx]),
+        None => expanded,
     };
     repl.input.reset(replacement);
     repl.completion_ui.completion.clear();
 }
 
-pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
+/// None leaves the current editor display intact. Redrawing a literal prompt
+/// with fresh suggestions would itself invoke completion providers.
+pub(crate) async fn handle_trigger_completion(
+    repl: &mut Repl<'_>,
+) -> Result<Option<ReplControlFlow>> {
     repl.completion_ui.path_feedback.clear();
+    repl.completion_ui
+        .integrated_completion
+        .runtime()
+        .take_path_request();
+    let source = repl.state.logical_input(repl.input.as_str());
+    let prefix_chars = repl.state.multiline_buffer.chars().count();
+    let cursor = prefix_chars + repl.input.cursor();
+    let (expanded, marker, label) = match tab_action(&source, cursor) {
+        TabAction::Shell => {
+            // The selector edits only the current line. A word opened on a
+            // previous prompt cannot be replaced within that buffer.
+            if prefix_chars > 0
+                && completion::integrated::token_range_at_cursor(&source, cursor)
+                    .is_none_or(|range| range.start < prefix_chars)
+            {
+                return Ok(None);
+            }
+            return complete_shell_input(repl).await.map(Some);
+        }
+        TabAction::Literal => return Ok(None),
+        TabAction::Generate(query) => (
+            repl.run_generative_command(query).await,
+            None,
+            "generated command",
+        ),
+        TabAction::ExpandPipe { marker, query } => (
+            repl.expand_smart_pipe(query).await,
+            Some(marker),
+            "smart pipe",
+        ),
+    };
+    match expanded {
+        Ok(expanded) => apply_ai_completion(repl, expanded, marker),
+        Err(error) => notify_ai_failure(repl, label, &error),
+    }
+    Ok(Some(ReplControlFlow::Continue))
+}
+
+async fn complete_shell_input(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
     let runtime = repl.completion_ui.integrated_completion.runtime();
-    runtime.take_path_request();
-    // Check for Smart Pipe Expansion (|? query)
-    if let Some(smart_pipe_query) = repl.detect_smart_pipe() {
-        match repl.expand_smart_pipe(smart_pipe_query).await {
-            Ok(expanded) => {
-                apply_ai_completion(repl, expanded, true);
-                return Ok(ReplControlFlow::Continue);
-            }
-            Err(e) => {
-                warn!("Smart pipe expansion failed: {}", e);
-                notify_ai_failure(repl, "smart pipe", &e);
-            }
-        }
-    }
-
-    // Check for Generative Command Expansion (?? query)
-    if let Some(generative_query) = repl.detect_generative_command() {
-        match repl.run_generative_command(&generative_query).await {
-            Ok(expanded) => {
-                apply_ai_completion(repl, expanded, false);
-                return Ok(ReplControlFlow::Continue);
-            }
-            Err(e) => {
-                warn!("Generative command expansion failed: {}", e);
-                notify_ai_failure(repl, "generated command", &e);
-            }
-        }
-    }
-
     // Classify before hooks, providers, legacy fallback and suggestions. An
     // empty allowed word has a zero-width range; suppressed syntax has none.
     let Some(lexical_range) =
@@ -570,25 +598,6 @@ mod tests {
     }
 
     #[test]
-    fn smart_pipe_marker_is_only_top_level_and_ai_query_remains_opaque() {
-        use crate::completion::command_segment::smart_pipe_marker;
-        for input in [
-            "echo # |? ignored",
-            "echo '|? ignored'",
-            "echo \\|?ignored",
-            "echo $(printf '|?')",
-            "echo |: select x |? ignored",
-            "echo |> x |? ignored",
-        ] {
-            assert_eq!(smart_pipe_marker(input), None, "{input:?}");
-        }
-        assert_eq!(
-            smart_pipe_marker("echo |? summarize # text |? remains query"),
-            Some(5)
-        );
-    }
-
-    #[test]
     fn integrated_replacement_range_creates_replace_range_action() {
         let action = completion_action(
             "dev-cluster".to_string(),
@@ -651,84 +660,6 @@ mod tests {
             Some(r#"dir\ with\ space/fo"#)
         );
     }
-    #[tokio::test]
-    async fn cancelled_ai_completion_retains_query_and_completed_retry_replaces_it() {
-        use crate::environment::Environment;
-        use crate::repl::Repl;
-        use crate::shell::Shell;
-        let mut shell = Shell::new(Environment::new());
-        let mut repl = Repl::new(&mut shell);
-        for (query, smart_pipe, expected) in [
-            ("?? 日本語 query", false, "\"echo\" retry"),
-            (
-                "cat payload |? 日本語 query",
-                true,
-                "cat payload | \"echo\" retry",
-            ),
-        ] {
-            repl.input.reset(query.to_string());
-            let cursor = repl.input.cursor();
-            super::apply_ai_completion(&mut repl, None, smart_pipe);
-            assert_eq!(repl.input.as_str(), query);
-            assert_eq!(repl.input.cursor(), cursor);
-            super::apply_ai_completion(&mut repl, Some("\"echo\" retry".into()), smart_pipe);
-            assert_eq!(repl.input.as_str(), expected);
-        }
-    }
-    #[tokio::test]
-    async fn delayed_ai_tab_routes_use_mock_service_and_allow_fresh_requests() {
-        use crate::ai_features::AiService;
-        use crate::environment::Environment;
-        use crate::repl::Repl;
-        use crate::shell::Shell;
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
-        struct Delayed(AtomicUsize);
-        #[async_trait::async_trait]
-        impl AiService for Delayed {
-            async fn send_request(
-                &self,
-                _: Vec<serde_json::Value>,
-                _: Option<f64>,
-            ) -> anyhow::Result<String> {
-                let id = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                Ok(serde_json::json!({"command":"echo", "args":[id.to_string()]}).to_string())
-            }
-        }
-        let mut shell = Shell::new(Environment::new());
-        let mut repl = Repl::new(&mut shell);
-        // Configure availability after construction; every Tab request uses
-        // the mock below, with no live API or background request involved.
-        {
-            let mut env = repl.shell.environment.write();
-            env.set_shell_var("AI_CHAT_PROVIDER".into(), "api_key".into());
-            env.set_shell_var("AI_CHAT_ALLOW_INSECURE_HTTP".into(), "true".into());
-            env.set_shell_var("AI_CHAT_BASE_URL".into(), "http://127.0.0.1:9/v1".into());
-            env.set_shell_var("AI_CHAT_API_KEY".into(), "mock-only".into());
-        }
-        let service = Arc::new(Delayed(AtomicUsize::new(0)));
-        repl.services.ai = Some(service.clone());
-        let input = "echo # 編集中\ncat |? summarize";
-        repl.input.reset(input.to_owned());
-        repl.input.move_to(8);
-        super::handle_trigger_completion(&mut repl).await.unwrap();
-        assert_eq!(service.0.load(Ordering::SeqCst), 0);
-        assert_eq!(repl.input.as_str(), input);
-        for (query, expected) in [
-            ("?? 日本語 query", "echo 1"),
-            ("cat payload |? 日本語 query", "cat payload | echo 2"),
-            ("?? 日本語 |? literal query", "echo 3"),
-        ] {
-            repl.input.reset(query.to_string());
-            super::handle_trigger_completion(&mut repl).await.unwrap();
-            // Executable quoting belongs to the separate literal-argv change.
-            assert_eq!(repl.input.as_str().replace("\"echo\"", "echo"), expected);
-        }
-        assert_eq!(service.0.load(Ordering::SeqCst), 3);
-    }
 }
 
 #[cfg(test)]
@@ -748,8 +679,10 @@ mod cursor_context_tests {
             ("bg >", " tail"),
             ("bg >>", " tail"),
             ("echo ok && bg > ", " tail"),
+            ("| bg > ", " tail"),
             ("bg -- > ", " tail"),
             ("echo 日本語 > ", " |? summarize errors (if any) |& notes"),
+            ("bg > ", " |! explain |? literally"),
             ("bg > ", "; next |& broken"),
         ] {
             let environment = Environment::new_synthetic();

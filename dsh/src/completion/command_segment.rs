@@ -94,7 +94,41 @@ pub(crate) fn words(input: &str) -> Vec<ShellTokenSpan> {
 }
 
 pub(crate) fn command_segment_at_cursor(input: &str, cursor: usize) -> CommandSegment {
+    use crate::parser::check::{SHELL_WHITESPACE, after_leading_continuations};
+
     let cursor = floor_byte(input, cursor);
+    // A line-head pipe reads the previous output. Scan its downstream command
+    // in its own coordinates, then map the active segment back to the editor.
+    let head = after_leading_continuations(input).trim_start_matches(SHELL_WHITESPACE);
+    let Some(tail) = head.strip_prefix('|') else {
+        return scan_segment(input, cursor);
+    };
+    let pipe = input.len() - head.len();
+    let start = if tail
+        .trim_start_matches("\\\n")
+        .starts_with(['|', '>', ':', '&'])
+    {
+        pipe
+    } else {
+        input.len() - after_leading_continuations(tail).len()
+    };
+    if cursor < start {
+        // The only completable sites in the skipped prefix are gaps after
+        // the pipe. Inserting between a backslash and LF breaks the splice.
+        let inside_splice = input[..cursor].ends_with('\\') && input[cursor..].starts_with('\n');
+        return CommandSegment {
+            range: cursor..cursor,
+            multiple: true,
+            suppressed: cursor <= pipe || inside_splice,
+        };
+    }
+    let mut segment = scan_segment(&input[start..], cursor - start);
+    segment.range = start + segment.range.start..start + segment.range.end;
+    segment.multiple = true;
+    segment
+}
+
+fn scan_segment(input: &str, cursor: usize) -> CommandSegment {
     let mut result = CommandSegment {
         range: 0..input.len(),
         multiple: false,
@@ -162,20 +196,22 @@ pub(crate) fn command_segment_at_cursor(input: &str, cursor: usize) -> CommandSe
     result
 }
 
-/// Byte offset of the first top-level `|?` (smart pipe) in `input`.
-pub(crate) fn smart_pipe_marker(input: &str) -> Option<usize> {
-    top_level_pipe_marker(input, "|?")
+/// Tab and Enter recognize different input shortcuts.
+pub(crate) enum PipeTrigger {
+    Tab,
+    Enter,
 }
 
-/// Byte offset of the first top-level `|!` (AI output pipe) in `input`.
-pub(crate) fn ai_pipe_marker(input: &str) -> Option<usize> {
-    top_level_pipe_marker(input, "|!")
-}
-
-/// Finds the first `|` control operator followed by `marker`'s second
-/// character, ignoring occurrences inside quotes, escapes, comments and
-/// substitutions.
-fn top_level_pipe_marker(input: &str, marker: &str) -> Option<usize> {
+/// Tab considers both markers because the first prompt owns its remaining
+/// text. Enter independently looks for its output-analysis marker.
+pub(crate) fn top_level_pipe_marker(input: &str, trigger: PipeTrigger) -> Option<usize> {
+    let markers: &[&str] = match trigger {
+        PipeTrigger::Tab => &["|?", "|!"],
+        PipeTrigger::Enter => &["|!"],
+    };
+    if !markers.iter().any(|marker| input.contains(marker)) {
+        return None;
+    }
     let pairs = ShellParser::parse(Rule::completion_scan, input)
         .ok()?
         .next()?;
@@ -183,10 +219,30 @@ fn top_level_pipe_marker(input: &str, marker: &str) -> Option<usize> {
         let start = pair.as_span().start();
         if pair.as_rule() == Rule::completion_control
             && pair.as_str() == "|"
-            && input[start..].starts_with(marker)
-            && !command_segment_at_cursor(&input[..start], start).suppressed
+            && markers
+                .iter()
+                .any(|marker| input[start..].starts_with(marker))
         {
-            return Some(start);
+            let prefix = &input[..start];
+            let segment = match trigger {
+                PipeTrigger::Tab => {
+                    let segment = command_segment_at_cursor(prefix, start);
+                    if segment.multiple
+                        && prefix[segment.range.clone()]
+                            .trim_matches(crate::parser::check::SHELL_WHITESPACE)
+                            .is_empty()
+                    {
+                        continue;
+                    }
+                    segment
+                }
+                // Output analysis runs the left side in an isolated shell.
+                // Only interactive completion can use the previous output.
+                PipeTrigger::Enter => scan_segment(prefix, start),
+            };
+            if !segment.suppressed {
+                return Some(start);
+            }
         }
     }
     None

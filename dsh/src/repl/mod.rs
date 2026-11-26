@@ -407,12 +407,12 @@ impl<'a> Repl<'a> {
 
     /// Move cursor relatively on the input line given previous and new display positions
     pub(crate) fn move_cursor_relative(
-        &self,
+        &mut self,
         out: &mut impl Write,
         prev_pos: (usize, usize),
-        new_pos: (usize, usize),
+        previous_cursor: usize,
     ) {
-        render::move_cursor_relative(self, out, prev_pos, new_pos)
+        render::move_cursor_relative(self, out, prev_pos, previous_cursor)
     }
 
     pub(crate) fn print_prompt(&mut self, out: &mut impl Write) {

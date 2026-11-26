@@ -61,6 +61,22 @@ fn cursor_edges_select_left_right_and_empty_rhs() {
 }
 
 #[test]
+fn malformed_later_command_does_not_suppress_the_current_word() {
+    for suffix in [
+        "; next |& broken",
+        " && next ||| broken",
+        "\nnext |> capture extra",
+    ] {
+        let input = format!("git --ver{suffix}");
+        let site = command_segment_at_cursor(&input, "git --ver".len());
+        assert!(!site.suppressed, "{input:?}");
+        assert!(site.multiple);
+        assert_eq!(input[site.range].trim_end(), "git --ver");
+        assert!(command_segment_at_cursor(&input, input.len()).suppressed);
+    }
+}
+
+#[test]
 fn redirects_and_continuation_do_not_create_false_commands() {
     for input in ["echo 2>&1", "echo <&0", "echo &>out", "echo &>>out"] {
         assert!(

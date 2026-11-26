@@ -8,6 +8,26 @@ use crate::repl::Repl;
 use crate::shell::Shell;
 
 #[tokio::test]
+async fn cursor_navigation_refreshes_the_tab_expansion_hint_at_the_marker() {
+    let mut shell = Shell::new(Environment::new_synthetic());
+    let mut repl = Repl::new(&mut shell);
+    repl.terminal_ui.columns = 100;
+    repl.input.reset("echo 界 |? summarize".into());
+    for (target, redraw, hint) in [(0, true, false), (1, false, false), (12, true, true)] {
+        let previous = repl.input.cursor();
+        let pos = repl
+            .input
+            .cursor_pos(100, repl.terminal_ui.prompt_mark_width);
+        repl.input.move_to(target);
+        let mut out = Vec::new();
+        repl.move_cursor_relative(&mut out, pos, previous);
+        let screen = String::from_utf8(out).unwrap();
+        assert_eq!(screen.contains("\x1b[J"), redraw, "{screen:?}");
+        assert_eq!(screen.contains("Tab to expand"), hint, "{screen:?}");
+    }
+}
+
+#[tokio::test]
 async fn refreshed_analysis_clears_stale_completion_before_accepting() {
     let mut shell = Shell::new(Environment::new());
     let mut repl = Repl::new(&mut shell);

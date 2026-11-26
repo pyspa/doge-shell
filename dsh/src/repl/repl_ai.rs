@@ -372,11 +372,13 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn detect_smart_pipe(&self) -> Option<String> {
-        crate::ai_task_input::smart_pipe_query(self.input.as_str()).map(str::to_owned)
+        crate::ai_task_input::smart_pipe_query(self.input.as_str(), self.input.cursor())
+            .map(str::to_owned)
     }
 
     pub(crate) fn detect_generative_command(&self) -> Option<String> {
-        crate::ai_task_input::generative_query(self.input.as_str()).map(str::to_owned)
+        crate::ai_task_input::generative_query(self.input.as_str(), self.input.cursor())
+            .map(str::to_owned)
     }
 
     /// Detect AI Output Pipe pattern: `command |! "query"`

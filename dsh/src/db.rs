@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{Connection, functions::FunctionFlags};
+use rusqlite::{Connection, OpenFlags, functions::FunctionFlags};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -11,7 +11,18 @@ pub struct Db {
 impl Db {
     pub fn new(path: PathBuf) -> Result<Self> {
         let conn = Connection::open(&path).context("Failed to open SQLite database")?;
+        Self::initialize(path, conn)
+    }
 
+    pub(crate) fn open_read_only(path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        Self::with_history_filter(conn)
+    }
+
+    fn initialize(path: PathBuf, conn: Connection) -> Result<Self> {
         #[cfg(unix)]
         {
             use std::fs;
@@ -31,6 +42,12 @@ impl Db {
              PRAGMA foreign_keys = ON;",
         )?;
 
+        let db = Self::with_history_filter(conn)?;
+        db.init_schema()?;
+        Ok(db)
+    }
+
+    fn with_history_filter(conn: Connection) -> Result<Self> {
         // Older databases can contain chat turns. Apply the same policy before
         // each query's LIMIT without deleting existing user data on startup.
         conn.create_scalar_function(
@@ -47,13 +64,9 @@ impl Db {
             },
         )?;
 
-        let db = Db {
+        Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-        };
-
-        db.init_schema()?;
-
-        Ok(db)
+        })
     }
 
     fn init_schema(&self) -> Result<()> {

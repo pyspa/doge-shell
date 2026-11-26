@@ -438,6 +438,10 @@ pub trait JobControlCapability {
 /// A supertrait bound keeps the frozen facade method count unchanged.
 pub trait EffectiveConfigCapability {
     fn effective_config(&self) -> Option<crate::effective_config::EffectiveConfig>;
+
+    fn config_load_report(&self) -> Option<crate::effective_config::ConfigLoadReport> {
+        None
+    }
 }
 
 /// POSIX `set -o` / `set +o` option state owned by the shell core.

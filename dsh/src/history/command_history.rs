@@ -18,6 +18,16 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+pub(crate) const COMMAND_HISTORY_NAME: &str = "dsh_cmd_history";
+
+fn history_command_filter(has_disposition: bool) -> &'static str {
+    if has_disposition {
+        "COALESCE(is_command, dogesh_history_command(command))"
+    } else {
+        "dogesh_history_command(command)"
+    }
+}
+
 const LEDGER_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
 const LEDGER_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const LEDGER_MAX_EVENTS: i64 = 10_000;
@@ -457,26 +467,33 @@ impl History {
 
     /// Create a history instance from a database file.
     pub fn from_file(name: &str) -> Result<Self> {
-        let file_path = environment::get_data_file(format!("{}.db", name).as_str())?;
-
-        let db = Db::new(file_path)?;
-
-        Ok(History {
-            db: Some(db),
-            histories: Vec::new(),
-            size: 10000,
-            current_index: 0,
-            search_word: None,
-            sender: None,
-            recent_cache: Vec::with_capacity(100),
-            normalized_entries: Vec::new(),
-            revision: 0,
-            pending_persistence: HashMap::new(),
-            failed_occurrences: HashMap::new(),
-            persist_ack_rx: None,
-            next_persistence_id: 0,
-            startup_writes: None,
+        let file_path = environment::get_data_file(&format!("{name}.db"))?;
+        Ok(Self {
+            db: Some(Db::new(file_path)?),
+            ..Self::new()
         })
+    }
+
+    /// Open a short-lived snapshot for a one-shot history query.
+    pub(crate) fn open_saved() -> Result<Self> {
+        use anyhow::Context as _;
+
+        let path = xdg::BaseDirectories::with_prefix(crate::shell::APP_NAME)
+            .get_data_home()
+            .context("cannot resolve the history data directory")?
+            .join(format!("{COMMAND_HISTORY_NAME}.db"));
+        match path.symlink_metadata() {
+            Ok(_) => {
+                let db = Db::open_read_only(&path)
+                    .with_context(|| format!("cannot open history database {}", path.display()))?;
+                Ok(Self {
+                    db: Some(db),
+                    ..Self::new()
+                })
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
+            Err(err) => Err(err).with_context(|| format!("cannot access {}", path.display())),
+        }
     }
 }
 

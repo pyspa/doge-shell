@@ -556,6 +556,15 @@ mod tests {
                         new_input
                     }
                 );
+                if applies {
+                    let completed_cursor = input.cursor();
+                    assert!(input.undo());
+                    assert_eq!(input.as_str(), before);
+                    assert_eq!(input.cursor(), expected_cursor);
+                    assert!(input.redo());
+                    assert_eq!(input.as_str(), "echo 界 hello\\ world tail");
+                    assert_eq!(input.cursor(), completed_cursor);
+                }
             }
         }
     }

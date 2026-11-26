@@ -42,15 +42,30 @@ impl History {
             return Ok(Vec::new());
         }
         let conn = db.get_connection();
+        let mut has_disposition = true;
+        if conn.is_readonly("main")? {
+            // The execution ledger may be missing entirely in older files.
+            let has_ledger = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'command_events')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !has_ledger {
+                return Ok(Vec::new());
+            }
+            has_disposition = conn.column_exists(None, "command_events", "is_command")?;
+        }
         let author = author.filter(|author| *author != "all");
-        let sql = if author.is_some() {
-            "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
-             FROM command_events WHERE author = ?1 AND COALESCE(is_command, dogesh_history_command(command)) ORDER BY started_at DESC, id DESC"
+        let author_filter = if author.is_some() {
+            "author = ?1 AND "
         } else {
-            "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
-             FROM command_events WHERE COALESCE(is_command, dogesh_history_command(command)) ORDER BY started_at DESC, id DESC"
+            ""
         };
-        let mut stmt = conn.prepare(sql)?;
+        let filter = history_command_filter(has_disposition);
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
+             FROM command_events WHERE {author_filter}{filter} ORDER BY started_at DESC, id DESC"
+        ))?;
         let map_row = |row: &rusqlite::Row<'_>| {
             Ok(CommandEvent {
                 id: row.get(0)?,

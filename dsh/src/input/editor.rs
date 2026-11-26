@@ -278,10 +278,15 @@ impl Input {
             self.indices[end]
         };
 
+        let cursor = start + replacement.chars().count();
+        if self.input[start_byte..end_byte] == *replacement && self.cursor == cursor {
+            return true;
+        }
+        self.record_undo(EditKind::Other);
         self.input.replace_range(start_byte..end_byte, replacement);
         self.update_indices();
         self.recalculate_display_width();
-        self.cursor = start + replacement.chars().count();
+        self.cursor = cursor;
         self.color_ranges = None;
         true
     }

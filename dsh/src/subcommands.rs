@@ -145,7 +145,7 @@ pub fn handle_import_command(shell_name: &str, custom_path: Option<&str>) -> Exi
     };
 
     // Create or load the dsh command history
-    let mut history = match History::from_file("dsh_cmd_history") {
+    let mut history = match History::from_file(crate::history::COMMAND_HISTORY_NAME) {
         Ok(h) => h,
         Err(err) => {
             error!("Failed to open dsh command history database: {err}");

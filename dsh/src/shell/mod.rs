@@ -57,6 +57,8 @@ pub struct Shell {
     pub pid: Pid,
     pub pgid: Pid,
     pub cmd_history: Option<Arc<ParkingMutex<crate::history::History>>>,
+    /// A top-level `-c` command may explicitly query saved history.
+    pub(crate) allow_saved_history_query: bool,
     pub path_history: Option<Arc<ParkingMutex<FrecencyHistory>>>,
     pub(crate) wait_jobs: Vec<Job>,
     /// Wait ownership for async launches: `Active` while the job runs,
@@ -145,6 +147,7 @@ impl Shell {
             pid,
             pgid,
             cmd_history: None,
+            allow_saved_history_query: false,
             path_history: None,
             wait_jobs: Vec::new(),
             known_async: job_ledger::KnownAsyncLedger::default(),

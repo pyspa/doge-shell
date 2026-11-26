@@ -23,11 +23,13 @@ mod tests;
 
 // Re-export main types for backward compatibility
 pub use command_history::History;
+pub(crate) use command_history::{
+    COMMAND_HISTORY_NAME, CommandHistoryReloadSnapshot, HistoryReloadApply,
+};
 pub use command_history::{
     CommandEvent, CommandLedgerMode, EntryMatcher, HistoryMetadata, HistoryQuery, HistoryScope,
     HistoryStatusFilter,
 };
-pub(crate) use command_history::{CommandHistoryReloadSnapshot, HistoryReloadApply};
 pub use context::get_current_context;
 pub use entry::Entry;
 pub use frecency_history::FrecencyHistory;

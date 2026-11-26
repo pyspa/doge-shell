@@ -1,8 +1,8 @@
 //! History command handler.
 
-use crate::history::{CommandEvent, HistoryQuery, HistoryScope, HistoryStatusFilter};
+use crate::history::{CommandEvent, History, HistoryQuery, HistoryScope, HistoryStatusFilter};
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use chrono::{Local, TimeZone};
 use dsh_types::Context;
 
@@ -10,25 +10,18 @@ use dsh_types::Context;
 ///
 /// Displays the command history.
 pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
-    let Some(ref mut history) = shell.cmd_history else {
-        if argv.get(1).map(String::as_str) == Some("record") {
-            anyhow::bail!("persistent history is unavailable");
-        }
-        if argv.iter().skip(1).any(|arg| arg == "--json") {
-            ctx.write_stdout("[]")?;
-        }
-        return Ok(());
-    };
-    let mut history = history.lock();
     if argv.get(1).map(String::as_str) == Some("record") {
+        let mut history = shell
+            .cmd_history
+            .as_ref()
+            .context("persistent history is unavailable")?
+            .lock();
         return record_external_event(&mut history, &shell.environment, ctx, &argv[2..]);
     }
     let options = HistoryOptions::parse(&argv[1..]);
 
     if options.help {
-        print_help(ctx)?;
-        history.reset_index();
-        return Ok(());
+        return print_help(ctx);
     }
 
     let query = HistoryQuery {
@@ -40,8 +33,38 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
         ..crate::history::query_context(shell.session_id.clone())
     };
 
+    if let Some(history) = &shell.cmd_history {
+        let mut history = history.lock();
+        let result = write_query(&history, ctx, &options, &query, false);
+        if result.is_ok() {
+            history.reset_index();
+        }
+        return result;
+    }
+
+    let history = if shell.allow_saved_history_query {
+        History::open_saved()?
+    } else {
+        History::new()
+    };
+    write_query(
+        &history,
+        ctx,
+        &options,
+        &query,
+        shell.allow_saved_history_query,
+    )
+}
+
+fn write_query(
+    history: &History,
+    ctx: &Context,
+    options: &HistoryOptions,
+    query: &HistoryQuery,
+    saved: bool,
+) -> Result<()> {
     if let Some(author) = options.author.as_deref() {
-        let events = history.search_command_events(Some(author), &query)?;
+        let events = history.search_command_events(Some(author), query)?;
         if options.json {
             ctx.write_stdout(&serde_json::to_string(&events)?)?;
         } else {
@@ -49,11 +72,16 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
                 ctx.write_stdout(&format_event(&event))?;
             }
         }
-        history.reset_index();
         return Ok(());
     }
 
-    let entries = history.search_entries(&query);
+    let entries = if saved {
+        history
+            .search_saved_entries(query)
+            .context("cannot read saved history")?
+    } else {
+        history.search_entries(query)
+    };
     if options.json {
         ctx.write_stdout(&serde_json::to_string(&entries)?)?;
     } else {
@@ -65,7 +93,6 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
             }
         }
     }
-    history.reset_index();
     Ok(())
 }
 

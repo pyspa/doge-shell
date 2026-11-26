@@ -1,5 +1,23 @@
 //! Finite, read-only projection of current nonsecurity runtime preferences.
 use serde::Serialize;
+use std::path::PathBuf;
+
+/// Outcome of the most recent attempt to load config.lisp in this shell.
+/// Diagnostics do not retain raw errors, which can contain config values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigLoadStatus {
+    Loaded,
+    Missing,
+    ReadFailed,
+    EvaluationFailed,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigLoadReport {
+    pub path: PathBuf,
+    pub status: ConfigLoadStatus,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

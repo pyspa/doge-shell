@@ -10,6 +10,7 @@ use crate::secrets::SecretManagerSnapshot;
 use crate::suggestion::InputPreferences;
 use anyhow::Context;
 use dsh_builtin::McpRuntimeStateSnapshot;
+use dsh_builtin::effective_config::{ConfigLoadReport, ConfigLoadStatus};
 use dsh_types::shell_options::ShellOptions;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -41,6 +42,7 @@ pub const CONFIG_FILE: &str = "config.lisp";
 pub struct LispEngine {
     pub env: Rc<RefCell<Env>>,
     pub shell_env: Arc<RwLock<Environment>>,
+    config_load_report: RefCell<Option<ConfigLoadReport>>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,15 +106,37 @@ impl LispEngine {
         Rc::new(RefCell::new(LispEngine {
             shell_env: Arc::clone(&shell_env),
             env: Rc::clone(&env),
+            config_load_report: RefCell::new(None),
         }))
     }
 
+    pub(crate) fn config_load_report(&self) -> Option<ConfigLoadReport> {
+        self.config_load_report.borrow().clone()
+    }
+
     pub fn run_config_lisp(&self) -> anyhow::Result<()> {
-        let file_path = environment::get_config_file(CONFIG_FILE)?;
-        let config_lisp: String = std::fs::read_to_string(&file_path)
-            .with_context(|| format!("Failed to read config file: {}", file_path.display()))?
-            .trim()
-            .to_string();
+        let mut report = ConfigLoadReport {
+            path: dsh_builtin::config_paths::config_home().join(CONFIG_FILE),
+            status: ConfigLoadStatus::ReadFailed,
+        };
+        let result = self.load_config_lisp(&mut report);
+        *self.config_load_report.borrow_mut() = Some(report);
+        result
+    }
+
+    fn load_config_lisp(&self, report: &mut ConfigLoadReport) -> anyhow::Result<()> {
+        report.path = environment::get_config_file(CONFIG_FILE)?;
+        let config_lisp = match std::fs::read_to_string(&report.path) {
+            Ok(config) => config,
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    report.status = ConfigLoadStatus::Missing;
+                }
+                return Err(error).with_context(|| {
+                    format!("Failed to read config file: {}", report.path.display())
+                });
+            }
+        };
 
         let env_snapshot = {
             let env = self.shell_env.read();
@@ -131,12 +155,13 @@ impl LispEngine {
             env.clear_mcp_servers();
         }
 
-        let run_result = self.run_program(&config_lisp);
+        let run_result = self.run_program(config_lisp.trim());
 
         match run_result {
             Ok(_) => {
                 // Restore original startup mode regardless of success/failure.
                 self.shell_env.write().startup_mode = env_snapshot.startup_mode;
+                report.status = ConfigLoadStatus::Loaded;
                 tracing::debug!("Successfully loaded config.lisp");
                 Ok(())
             }
@@ -152,6 +177,7 @@ impl LispEngine {
                     .write()
                     .restore_actions(action_registry_snapshot);
                 restore_process_env(process_env_snapshot);
+                report.status = ConfigLoadStatus::EvaluationFailed;
                 tracing::error!("Failed to execute config.lisp: {}", e);
                 Err(e)
             }

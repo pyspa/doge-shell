@@ -1,10 +1,16 @@
 //! Coherent read of the runtime owners used by `doctor config`.
 use crate::shell::Shell;
-use dsh_builtin::effective_config::{CommandLedgerMode, EffectiveConfig, SuggestionMode};
+use dsh_builtin::effective_config::{
+    CommandLedgerMode, ConfigLoadReport, EffectiveConfig, SuggestionMode,
+};
 use dsh_builtin::shell_capabilities::EffectiveConfigCapability;
 use dsh_types::shell_options::ShellOption;
 
 impl EffectiveConfigCapability for Shell {
+    fn config_load_report(&self) -> Option<ConfigLoadReport> {
+        self.lisp_engine.borrow().config_load_report()
+    }
+
     fn effective_config(&self) -> Option<EffectiveConfig> {
         let env = self.environment.read();
         let prefs = env.input_preferences();

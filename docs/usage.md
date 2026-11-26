@@ -418,6 +418,9 @@ ledger queries by author. Aggregate rows describe commands submitted to the shel
 dual-write is enabled with `DOGESH_ATUIN_DUAL_WRITE=1`; failures run off the prompt
 path and never block a command.
 
+From another shell, `dogesh -c 'history --json'` reads saved history without
+recording the query. Use `history --help` to see the same options in either mode.
+
 ### `doctor` Command
 
 Inspect the current shell setup and project context.
@@ -440,6 +443,12 @@ doctor --help
 ```
 
 `doctor` reports on configuration files, AI settings, AI chat hook configuration, MCP connection counters, project marker files, common developer runtimes found in `PATH`, performance/cache state, the skills this shell would load (and anything wrong with them), runtime Skill drift, setup readiness, and focused validation commands for changed files. `doctor fix` creates safe missing setup files and directories such as `config.lisp`, runtime skills, and completion directories.
+
+`doctor config` shows the outcome of the latest startup or `reload` attempt
+and the settings currently in effect. `doctor config --json` reports the
+outcome as `details.config.load_status` (`loaded`, `missing`, `read_failed`,
+`evaluation_failed`, or `null` if no attempt was made). The report does not run
+the configuration again.
 
 ### `help` Command
 

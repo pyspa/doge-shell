@@ -78,6 +78,7 @@ pub async fn run_shell() -> ExitCode {
     // RunMode is the invocation authority, even when a script inherits a TTY.
     env.write().invocation.interactive = run_mode.needs_interactive_services();
     let mut shell = Shell::new(env);
+    shell.allow_saved_history_query = matches!(run_mode, RunMode::Command { .. });
     let mut startup_tasks = StartupBackgroundTasks::default();
 
     if run_mode.needs_interactive_services() {
@@ -88,7 +89,7 @@ pub async fn run_shell() -> ExitCode {
         shell.cmd_history = Some(cmd_history.clone());
 
         startup_tasks.push_loader(std::thread::spawn(move || {
-            match crate::history::History::from_file("dsh_cmd_history") {
+            match crate::history::History::from_file(crate::history::COMMAND_HISTORY_NAME) {
                 Ok(mut history) => {
                     prepare_command_history(&mut history);
                     publish_command_history(&cmd_history, history);
@@ -134,12 +135,16 @@ pub async fn run_shell() -> ExitCode {
     // Load config.lisp to initialize aliases, variables, and other settings
     // Enable startup mode to prevent blocking MCP server connections
     shell.environment.write().startup_mode = true;
-    if let Err(e) = shell.lisp_engine.borrow().run_config_lisp() {
-        // Only warn if it's not a "file not found" error (config.lisp is optional)
-        let err_str = e.to_string();
-        if !err_str.contains("No such file or directory") && !err_str.contains("config file") {
+    {
+        use dsh_builtin::effective_config::ConfigLoadStatus;
+        let engine = shell.lisp_engine.borrow();
+        if let Err(e) = engine.run_config_lisp()
+            && engine
+                .config_load_report()
+                .is_some_and(|report| report.status != ConfigLoadStatus::Missing)
+        {
             tracing::warn!("Failed to load config.lisp: {}", e);
-            eprintln!("Warning: Failed to load config.lisp: {}", e);
+            eprintln!("Warning: Failed to load config.lisp: {e:#}");
         }
     }
     // Disable startup mode

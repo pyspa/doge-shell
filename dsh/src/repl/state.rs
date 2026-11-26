@@ -154,6 +154,5 @@ pub(crate) fn apply_completion_range(
     if input.as_str() != expected_input || input.cursor() != expected_cursor {
         return false;
     }
-    input.replace_range_chars(start, end, text);
-    true
+    input.replace_range_chars(start, end, text)
 }

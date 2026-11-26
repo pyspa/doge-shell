@@ -1,23 +1,87 @@
 //! Loading `History` from SQLite and refreshing it later: the initial `load`, a background-thread `request_reload`/synchronous `reload` pair that never overwrites newer local writes (revision-gated), and
 //! `load_older_than` for the picker's "load more" scroll.
 use super::*;
-use rusqlite::OptionalExtension;
+use rusqlite::{OptionalExtension, Row, types::FromSql};
 
-fn history_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
+fn history_entry(row: &Row<'_>) -> rusqlite::Result<Entry> {
+    decode_entry::<false>(row)
+}
+
+fn decode_entry<const STRICT: bool>(row: &Row<'_>) -> rusqlite::Result<Entry> {
+    fn optional<T: FromSql, const STRICT: bool>(
+        row: &Row<'_>,
+        index: usize,
+    ) -> rusqlite::Result<Option<T>> {
+        if STRICT {
+            row.get(index)
+        } else {
+            Ok(row.get(index).ok())
+        }
+    }
+
     Ok(Entry {
         entry: row.get(0)?,
         when: row.get(1)?,
-        count: row.get(2).unwrap_or(1),
-        context: row.get(3).ok(),
-        exit_code: row.get(4).ok(),
+        count: optional::<_, STRICT>(row, 2)?.unwrap_or(1),
+        context: optional::<_, STRICT>(row, 3)?,
+        exit_code: optional::<_, STRICT>(row, 4)?,
         duration_ms: row.get::<_, Option<i64>>(5)?.map(|v| v.max(0) as u64),
-        cwd: row.get(6).ok(),
-        session_id: row.get(7).ok(),
-        hostname: row.get(8).ok(),
+        cwd: optional::<_, STRICT>(row, 6)?,
+        session_id: optional::<_, STRICT>(row, 7)?,
+        hostname: optional::<_, STRICT>(row, 8)?,
     })
 }
 
 impl History {
+    /// Search the saved aggregate from newest to oldest, applying the result
+    /// limit after matching. Older files get the same defaults as a migration.
+    pub(crate) fn search_saved_entries(&self, query: &HistoryQuery) -> Result<Vec<Entry>> {
+        let Some(db) = &self.db else {
+            return Ok(Vec::new());
+        };
+        if query.limit == Some(0) {
+            return Ok(Vec::new());
+        }
+        let conn = db.get_connection();
+        let schema = conn.prepare("SELECT * FROM command_history LIMIT 0")?;
+        let columns: Vec<_> = schema.column_names().collect();
+        let optional_fields = [
+            ("count", "1"),
+            ("context", "NULL"),
+            ("exit_code", "NULL"),
+            ("duration_ms", "NULL"),
+            ("cwd", "NULL"),
+            ("session_id", "NULL"),
+            ("hostname", "NULL"),
+        ]
+        .map(|(column, fallback)| {
+            if columns.contains(&column) {
+                column
+            } else {
+                fallback
+            }
+        })
+        .join(", ");
+        let filter = history_command_filter(columns.contains(&"is_command"));
+        let mut stmt = conn.prepare(&format!(
+            "SELECT command, timestamp, {optional_fields} FROM command_history
+             WHERE {filter} ORDER BY timestamp DESC, id DESC"
+        ))?;
+        let rows = stmt.query_map([], decode_entry::<true>)?;
+        let matcher = EntryMatcher::new(query);
+        let mut matched = Vec::new();
+        for row in rows {
+            let entry = row?;
+            if matcher.matches(&entry, None) {
+                matched.push(entry);
+                if query.limit.is_some_and(|limit| matched.len() >= limit) {
+                    break;
+                }
+            }
+        }
+        Ok(matched)
+    }
+
     /// Load all history entries.
     pub fn load(&mut self) -> Result<usize> {
         self.load_recent(10000).map(|_| self.histories.len())

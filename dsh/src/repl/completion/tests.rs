@@ -322,6 +322,43 @@ fn test_command_prefix_completion_still_uses_environment_first() {
 }
 
 #[test]
+fn fallback_completion_extends_only_a_literal_command_at_line_end() {
+    let environment = Environment::new_synthetic();
+    environment.write().set_executable_names(vec![
+        "audit-esc\u{1b}ape".into(),
+        "audit-space name".into(),
+        "audit-space names".into(),
+    ]);
+    for (input, expected) in [
+        (
+            "echo 日本語 && audit-sp",
+            Some("echo 日本語 && audit-space\\ name"),
+        ),
+        (
+            "echo 日本語 | audit-sp",
+            Some("echo 日本語 | audit-space\\ name"),
+        ),
+        ("echo audit-sp", None),
+        ("echo a && audit-space\\ name", None),
+        ("echo a && audit-esc", None),
+        ("echo a && $VAR'audit-sp'", None),
+    ] {
+        let state = completion_input(input);
+        let suggestion = completion_suggestion(
+            &state,
+            input,
+            &environment,
+            &file_context(input, &environment),
+        );
+        assert_eq!(
+            suggestion.as_ref().map(|s| s.full.as_str()),
+            expected,
+            "{input}"
+        );
+    }
+}
+
+#[test]
 fn audit_unicode_separator() {
     for sep in ['\u{3000}', '\u{a0}'] {
         assert_eq!(trailing_symbol(&format!("echo{sep}mcp-")), "mcp-");

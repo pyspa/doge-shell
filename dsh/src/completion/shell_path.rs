@@ -196,6 +196,9 @@ pub(crate) fn decode_literal_word(raw: &str) -> String {
     let mut chars = raw.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
+            if quote != Some('\'') && chars.next_if_eq(&'\n').is_some() {
+                continue;
+            }
             let escaped = chars.peek().is_some_and(|next| match quote {
                 Some('\'') => *next == '\'',
                 Some('"') => matches!(next, '$' | '"' | '\\' | '`'),
@@ -217,7 +220,7 @@ pub(crate) fn decode_literal_word(raw: &str) -> String {
     result
 }
 
-fn escape_unquoted(path: &str) -> String {
+pub(crate) fn escape_unquoted(path: &str) -> String {
     if path.is_empty() {
         return "''".to_string();
     }

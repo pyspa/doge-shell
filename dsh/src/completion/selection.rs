@@ -151,9 +151,9 @@ struct LegacyArgument {
 }
 
 impl LegacyArgument {
-    fn at(input: &Input) -> Option<Self> {
-        let cursor = super::command_segment::char_to_byte(input.as_str(), input.cursor());
-        let parsed = super::parser::CommandLineParser::new().parse(input.as_str(), cursor);
+    fn at(source: &str, cursor: usize) -> Option<Self> {
+        let cursor = super::command_segment::char_to_byte(source, cursor);
+        let parsed = super::parser::CommandLineParser::new().parse(source, cursor);
         let source = parsed.source?;
         if source.suppressed || source.cursor_word <= source.command_word {
             return None;
@@ -203,13 +203,34 @@ pub async fn input_completion(
     prompt_text: &str,
     input_text: &str,
 ) -> CompletionSelection {
+    input_completion_at(
+        input.as_str(),
+        input.cursor(),
+        repl,
+        query,
+        raw_token,
+        prompt_text,
+        input_text,
+    )
+    .await
+}
+
+pub(crate) async fn input_completion_at(
+    source: &str,
+    cursor: usize,
+    repl: &Repl<'_>,
+    query: Option<&str>,
+    raw_token: Option<&str>,
+    prompt_text: &str,
+    input_text: &str,
+) -> CompletionSelection {
     let framework = default_completion_framework();
     debug!("input_completion starting with query: {:?}", query);
 
-    if let Some(argument) = LegacyArgument::at(input) {
+    if let Some(argument) = LegacyArgument::at(source, cursor) {
         let (selection, preformatted) = completion_from_lisp_with_prompt(
             &argument,
-            input,
+            source,
             repl,
             query,
             prompt_text,
@@ -245,8 +266,7 @@ pub async fn input_completion(
     }
 
     let selection =
-        completion_from_current_with_prompt(input, repl, query, prompt_text, input_text, framework)
-            .await;
+        completion_from_current_with_prompt(repl, query, prompt_text, input_text, framework).await;
     render_legacy_selection(selection, raw_token)
 }
 
@@ -274,7 +294,7 @@ fn render_legacy_selection(
 
 async fn completion_from_lisp_with_prompt(
     argument: &LegacyArgument,
-    input: &Input,
+    source: &str,
     repl: &Repl<'_>,
     query: Option<&str>,
     prompt_text: &str,
@@ -294,7 +314,7 @@ async fn completion_from_lisp_with_prompt(
     };
     if let Some(func) = &compl.func {
         // run lisp func with input as argument
-        let args = vec![Value::String(replace_space(input.as_str()))];
+        let args = vec![Value::String(replace_space(source))];
         match lisp_engine.borrow().apply_func(func.to_owned(), args) {
             Ok(Value::List(list)) => {
                 let mut items: Vec<Candidate> = Vec::new();
@@ -370,7 +390,7 @@ pub fn completion_for_dir_stack(
     input_text: &str,
     framework: CompletionFrameworkKind,
 ) -> CompletionSelection {
-    let Some(argument) = LegacyArgument::at(input) else {
+    let Some(argument) = LegacyArgument::at(input.as_str(), input.cursor()) else {
         return CompletionSelection::None;
     };
     dir_stack_candidates(&argument, repl, query, prompt_text, input_text, framework)
@@ -439,7 +459,7 @@ pub(crate) fn completion_for_z_with_path_history(
     input_text: &str,
     framework: CompletionFrameworkKind,
 ) -> CompletionSelection {
-    let Some(argument) = LegacyArgument::at(input) else {
+    let Some(argument) = LegacyArgument::at(input.as_str(), input.cursor()) else {
         return CompletionSelection::None;
     };
     z_history_candidates(
@@ -484,7 +504,6 @@ fn z_history_candidates(
 }
 
 async fn completion_from_current_with_prompt(
-    _input: &Input,
     repl: &Repl<'_>,
     query: Option<&str>,
     prompt_text: &str,

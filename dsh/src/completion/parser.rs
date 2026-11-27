@@ -195,7 +195,7 @@ impl CommandLineParser {
         // Redirect operators are shell syntax, not completable argv words.
         // FD duplication targets are descriptor numbers (or `-`), never paths.
         // Mark these regions before any provider or legacy TAB hook is reached.
-        let (command_word, malformed_prefix) = prefix::command_word(&spans);
+        let (command_word, malformed_prefix) = prefix::command_word(source_input, &spans);
         let redirect_target = cursor_token_index
             .checked_sub(1)
             .and_then(|index| spans.get(index))
@@ -209,10 +209,7 @@ impl CommandLineParser {
             || cursor_token_index
                 .checked_sub(1)
                 .and_then(|i| spans.get(i))
-                .is_some_and(|word| {
-                    Self::is_redirect_operator(&word.raw)
-                        && (word.raw.ends_with(">&") || word.raw.ends_with("<&"))
-                });
+                .is_some_and(|word| Self::is_descriptor_redirect(&word.raw));
         let command_start = spans
             .get(command_word)
             .map_or(source_input.len(), |word| word.byte_start);
@@ -704,14 +701,25 @@ impl CommandLineParser {
 
     /// Determine if token represents a redirect operator
     pub(crate) fn is_redirect_operator(token: &str) -> bool {
-        if matches!(token, "&>" | "&>>") {
-            return true;
+        Self::redirect_operator(token).is_some()
+    }
+
+    fn is_descriptor_redirect(token: &str) -> bool {
+        matches!(Self::redirect_operator(token), Some(">&" | "<&"))
+    }
+
+    fn redirect_operator(token: &str) -> Option<&'static str> {
+        // Source words keep their original spelling and offsets.
+        let token = crate::parser::check::join_continued_lines(token);
+        match token.as_ref() {
+            "&>" => Some("&>"),
+            "&>>" => Some("&>>"),
+            _ => [">&", "<&", ">>", ">", "<"].into_iter().find(|suffix| {
+                token
+                    .strip_suffix(suffix)
+                    .is_some_and(|prefix| prefix.bytes().all(|c| c.is_ascii_digit()))
+            }),
         }
-        [">&", "<&", ">>", ">", "<"].iter().any(|suffix| {
-            token
-                .strip_suffix(suffix)
-                .is_some_and(|prefix| prefix.bytes().all(|c| c.is_ascii_digit()))
-        })
     }
 }
 

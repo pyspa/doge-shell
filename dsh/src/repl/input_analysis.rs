@@ -45,81 +45,42 @@ pub(crate) fn analyze_input(
     }
 
     let offer_completion = repl.input.cursor_at_end() && completion.is_none();
-    let filesystem = offer_completion
-        .then(|| {
-            let current_dir = repl.terminal_ui.prompt.read().current_path().to_path_buf();
-            repl.completion_ui
-                .integrated_completion
-                .filesystem_context_for_input(input, repl.input.cursor(), &current_dir)
-        })
-        .flatten();
+    let complete_word = |source: &str, pairs: pest::iterators::Pairs<'_, Rule>, cursor| {
+        let current_dir = repl.terminal_ui.prompt.read().current_path().to_path_buf();
+        let filesystem = repl
+            .completion_ui
+            .integrated_completion
+            .filesystem_context_for_input(source, cursor, &current_dir);
+        super::completion::word_based_completion(
+            &repl.shell.environment,
+            source,
+            pairs,
+            filesystem.as_ref(),
+        )
+    };
 
     match ShellParser::parse(Rule::commands, input) {
         Ok(pairs) => {
-            // 1. Get words for completion check
-            let words = if offer_completion {
-                repl.input.get_words_from_pairs(pairs.clone())
+            let word_completion = if !offer_completion {
+                None
+            } else if repl.state.multiline_buffer.is_empty() && !input.contains("\\\n") {
+                complete_word(input, pairs.clone(), repl.input.cursor())
             } else {
-                Vec::new()
+                let logical_input = repl.state.logical_input(input);
+                let source = parser::check::join_continued_lines(&logical_input);
+                ShellParser::parse(Rule::commands, &source)
+                    .ok()
+                    .and_then(|pairs| complete_word(&source, pairs, source.chars().count()))
+                    .map(|mut word_completion| {
+                        word_completion.full = format!("{input}{}", word_completion.suffix);
+                        word_completion
+                    })
             };
-            let mut completion_full = None;
+            let completion_full = word_completion.map(|word_completion| {
+                completion = Some(word_completion.suffix);
+                word_completion.full
+            });
 
-            for (ref rule, ref span, current) in words {
-                let word = span.as_str();
-                if word.is_empty() {
-                    continue;
-                }
-
-                match rule {
-                    Rule::argv0 if current => {
-                        if let Some(file) = repl.shell.environment.read().search_prefix(word) {
-                            // Only a strict extension of the whole line is
-                            // a completion; a bare command name for a later
-                            // list element would be a no-op accept that
-                            // shadows Ctrl+E and AI-suggestion acceptance.
-                            if file.len() > input.len() && file.starts_with(input) {
-                                completion = Some(file[input.len()..].to_string());
-                                completion_full = Some(file);
-                            }
-                            break;
-                        } else if let Some(filesystem) = filesystem.as_ref()
-                            && let Some(path_completion) = super::completion::complete_path_for_span(
-                                input,
-                                span.start(),
-                                span.end(),
-                                true,
-                                filesystem,
-                            )
-                        {
-                            completion = Some(path_completion.suffix);
-                            completion_full = Some(path_completion.full);
-                            break;
-                        }
-                    }
-                    Rule::args => {
-                        // Completion logic for arguments
-                        if current
-                            && let Some(filesystem) = filesystem.as_ref()
-                            && let Some(path_completion) = super::completion::complete_path_for_span(
-                                input,
-                                span.start(),
-                                span.end(),
-                                false,
-                                filesystem,
-                            )
-                        {
-                            completion = Some(path_completion.suffix);
-                            completion_full = Some(path_completion.full);
-                            break;
-                        }
-                    }
-                    _ => {
-                        // For other rule types, leave them with default color
-                    }
-                }
-            }
-
-            // 2. Compute color ranges using the same pairs
             let consumed = pairs.clone().next().map(|pair| pair.as_span().end());
             let (mut color_ranges, can_execute) =
                 repl.compute_color_ranges_from_pairs(pairs, input);

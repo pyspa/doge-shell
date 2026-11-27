@@ -163,27 +163,33 @@ impl<'a> Repl<'a> {
     }
 
     async fn apply_repl_control_flow(&mut self, mut control_flow: ReplControlFlow) -> Result<()> {
-        while let ReplControlFlow::ReplayInput(event) = control_flow {
-            control_flow = self.handle_event(ShellEvent::Input(event)).await?;
+        loop {
+            control_flow = match control_flow {
+                ReplControlFlow::ReplayInput(event) => {
+                    self.handle_event(ShellEvent::Input(event)).await?
+                }
+                ReplControlFlow::OpenCommandPalette => {
+                    self.event_loop.pause_input();
+                    let status_pause =
+                        status_line::StatusLinePause::new(self.terminal_ui.status_line.clone());
+                    let result = key_handlers::auxiliary::handle_open_command_palette(self).await;
+                    drop(status_pause);
+                    self.event_loop.resume_input();
+                    result?
+                }
+                _ => break,
+            };
         }
         match control_flow {
-            ReplControlFlow::ReplayInput(_) => unreachable!("replayed above"),
+            ReplControlFlow::ReplayInput(_) | ReplControlFlow::OpenCommandPalette => {
+                unreachable!("handled above")
+            }
             ReplControlFlow::Continue => {}
             ReplControlFlow::ExecuteCurrentInput => {
                 self.event_loop.pause_input();
                 let status_pause =
                     status_line::StatusLinePause::new(self.terminal_ui.status_line.clone());
                 let result = key_handlers::execution::handle_execute(self).await;
-                drop(status_pause);
-
-                result?;
-                self.event_loop.resume_input();
-            }
-            ReplControlFlow::OpenCommandPalette => {
-                self.event_loop.pause_input();
-                let status_pause =
-                    status_line::StatusLinePause::new(self.terminal_ui.status_line.clone());
-                let result = key_handlers::auxiliary::handle_open_command_palette(self).await;
                 drop(status_pause);
 
                 result?;
@@ -233,6 +239,7 @@ impl<'a> Repl<'a> {
                         }
                         self.input.completion = None;
                         self.input.color_ranges = None;
+                        self.discard_edited_history_draft();
                     }
                     Ok(None) => {}
                     Err(error) => {

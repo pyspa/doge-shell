@@ -1,6 +1,12 @@
 //! History-related helpers pulled out of the main `impl Repl`: saving path history and the Ctrl-R history picker (`select_history` / `select_history_with_skim`).
 use super::*;
 
+pub(super) struct HistoryDraft {
+    pub(super) text: String,
+    pub(super) cursor: usize,
+    pub(super) recalled_revision: u64,
+}
+
 impl<'a> Repl<'a> {
     pub(super) fn save_history(&mut self) {
         // Wait for an in-flight directory write before the process exits.
@@ -20,14 +26,24 @@ impl<'a> Repl<'a> {
     }
 
     pub(super) fn stop_history_mode(&mut self) {
-        self.history_search = None;
+        self.history_draft = None;
         if let Some(ref mut history) = self.shell.cmd_history
             && let Some(mut history) = history.try_lock()
         {
             history.search_word = None;
             history.reset_index();
         }
-        // If we can't get the lock, we just won't be able to stop history mode - no warning needed
+        // The next recall resets the index whenever there is no saved draft.
+    }
+
+    pub(super) fn discard_edited_history_draft(&mut self) {
+        if self
+            .history_draft
+            .as_ref()
+            .is_some_and(|draft| draft.recalled_revision != self.input.edit_revision())
+        {
+            self.stop_history_mode();
+        }
     }
 
     pub(super) fn get_completion_from_history(&self, input: &str) -> Option<String> {
@@ -73,7 +89,7 @@ impl<'a> Repl<'a> {
         let Some(history_arc) = self.shell.cmd_history.as_ref() else {
             return Ok(ReplControlFlow::Continue);
         };
-        let Some(mut history) = history_arc.try_lock() else {
+        let Some(history) = history_arc.try_lock() else {
             warn!("Failed to acquire command history lock for history selection - lock is busy");
             return Ok(ReplControlFlow::Continue);
         };
@@ -95,7 +111,6 @@ impl<'a> Repl<'a> {
         .with_execution_loader(ledger_mode, || {
             history.picker_execution_metadata(Self::HISTORY_PICKER_SNAPSHOT)
         });
-        history.reset_index();
         // Released before the interactive session: the picker owns a snapshot,
         // and holding the lock would block the background history writer.
         drop(history);
@@ -119,62 +134,39 @@ impl<'a> Repl<'a> {
         })))
     }
 
-    /// The pre-picker skim flow, kept behind `DOGESH_HISTORY_PICKER=skim`.
+    /// Compatibility picker, still requiring an explicit choice for a single match.
     fn select_history_with_skim(&mut self) -> Result<ReplControlFlow> {
-        let query = self.input.as_str();
-        if let Some(ref mut history) = self.shell.cmd_history {
-            if let Some(mut history) = history.try_lock() {
-                let history_query = crate::history::HistoryQuery {
-                    text: if query.is_empty() {
-                        None
-                    } else {
-                        Some(query.to_string())
-                    },
-                    limit: Some(500),
-                    ..Default::default()
-                };
-                let items: Vec<completion_lib::Candidate> = history
-                    .search_entries(&history_query)
-                    .into_iter()
-                    .map(|h| completion_lib::Candidate::Basic(h.entry.clone()))
-                    .collect();
+        let Some(history) = self
+            .shell
+            .cmd_history
+            .as_ref()
+            .and_then(|history| history.try_lock())
+        else {
+            return Ok(ReplControlFlow::Continue);
+        };
+        let query = self.input.as_str().to_owned();
+        let history_query = crate::history::HistoryQuery {
+            text: (!query.is_empty()).then(|| query.clone()),
+            limit: Some(500),
+            ..Default::default()
+        };
+        let items: Vec<_> = history
+            .search_entries(&history_query)
+            .into_iter()
+            .map(|entry| completion_lib::Candidate::Basic(entry.entry.clone()))
+            .collect();
+        drop(history);
 
-                let res = completion_lib::select_item_with_skim(items, Some(query));
-
-                history.reset_index();
-
-                match res {
-                    completion_lib::CompletionSelection::Selected(val) => {
-                        // Replace current input with the selected history command
-                        self.input.reset(val);
-                        return Ok(ReplControlFlow::Continue);
-                    }
-                    completion_lib::CompletionSelection::Interactive(items, query) => {
-                        let query = query.unwrap_or_default();
-                        return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
-                            use completion_lib::framework::SkimCompletionFramework;
-
-                            let result = SkimCompletionFramework::run_with_skim(items, Some(query));
-                            Ok(result.map(|text| {
-                                crate::repl::state::InteractiveAction::ReplaceAll { text }
-                            }))
-                        })));
-                    }
-                    completion_lib::CompletionSelection::Event(event) => {
-                        return Ok(ReplControlFlow::ReplayInput(event));
-                    }
-                    completion_lib::CompletionSelection::None
-                    | completion_lib::CompletionSelection::Cancelled
-                    | crate::completion::CompletionSelection::Input(_) => {
-                        return Ok(ReplControlFlow::Continue);
-                    }
-                }
-            } else {
-                warn!(
-                    "Failed to acquire command history lock for history selection - lock is busy"
-                );
-            }
+        if items.is_empty() {
+            return Ok(ReplControlFlow::Continue);
         }
-        Ok(ReplControlFlow::Continue)
+        Ok(ReplControlFlow::RunInteractive(Box::new(move || {
+            use completion_lib::framework::SkimCompletionFramework;
+
+            Ok(
+                SkimCompletionFramework::pick_with_skim(items, Some(query), false)
+                    .map(|text| crate::repl::state::InteractiveAction::ReplaceAll { text }),
+            )
+        })))
     }
 }

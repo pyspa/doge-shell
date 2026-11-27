@@ -1,4 +1,4 @@
-use crate::command_palette::CommandPalette;
+use crate::command_palette::{CommandPalette, PaletteOutcome};
 use crate::completion::display::Candidate;
 use crate::process::job::Job;
 use crate::repl::Repl;
@@ -18,23 +18,22 @@ use std::sync::Arc;
 
 /// Handle opening the command palette.
 pub(crate) async fn handle_open_command_palette(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
-    // Disable raw mode so Skim can handle terminal state correctly
-    disable_raw_mode().ok();
-
-    if let Some(replacement) = CommandPalette::run(repl.shell, repl.input.as_str()).await? {
-        repl.input.reset(replacement);
-        repl.input.completion = None;
-        repl.input.color_ranges = None;
+    let raw_mode_pause = crate::repl::terminal_state::RawModePause::new();
+    let outcome = CommandPalette::run(repl.shell, repl.input.as_str()).await;
+    drop(raw_mode_pause);
+    match outcome? {
+        Some(PaletteOutcome::ReplaceInput(replacement)) => {
+            repl.input.reset(replacement);
+            repl.input.completion = None;
+            repl.input.color_ranges = None;
+            repl.discard_edited_history_draft();
+        }
+        Some(PaletteOutcome::SearchHistory) => return repl.select_history(),
+        None => {}
     }
-
-    // Re-enable raw mode for the shell
-    enable_raw_mode().ok();
 
     let mut renderer = TerminalRenderer::new();
     repl.print_prompt(&mut renderer);
-    // Actions that hand a command back (Search History, Block Browser) put it in
-    // the buffer; without this it stays invisible until the next keystroke and
-    // the palette looks like it did nothing.
     repl.print_input(&mut renderer, true, false);
     renderer.flush().ok();
     Ok(ReplControlFlow::Continue)

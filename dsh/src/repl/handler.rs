@@ -1,3 +1,5 @@
+//! Terminal input dispatch for the REPL, including configured key bindings.
+
 use crate::repl::Repl;
 use crate::repl::key_action::{KeyAction, KeyContext, determine_key_action};
 use crate::repl::keybind::{BoundAction, Resolved};
@@ -152,6 +154,13 @@ pub(crate) async fn handle_key_event(
     repl: &mut Repl<'_>,
     ev: &KeyEvent,
 ) -> Result<ReplControlFlow> {
+    repl.discard_edited_history_draft();
+    let result = dispatch_key_event(repl, ev).await;
+    repl.discard_edited_history_draft();
+    result
+}
+
+async fn dispatch_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Result<ReplControlFlow> {
     repl.completion_ui.path_feedback.clear();
     // DEBUG: Log all key events to trace the issue
     debug!(

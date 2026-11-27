@@ -44,6 +44,7 @@ pub struct Input {
     indices: Vec<usize>,
     /// Cached display width of the full input string (updated on modification)
     cached_display_width: usize,
+    edit_revision: u64,
 
     /// Text removed by the most recent kill (Ctrl-K / Ctrl-U / Ctrl-W),
     /// re-insertable with Ctrl-Y.
@@ -71,6 +72,7 @@ impl Input {
             input: String::with_capacity(INITIAL_CAP),
             indices: Vec::with_capacity(INITIAL_CAP),
             cached_display_width: 0,
+            edit_revision: 0,
             kill_ring: String::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -88,6 +90,7 @@ impl Input {
     /// Consecutive inserts coalesce into one step; any other edit starts a new
     /// one. Recording an edit invalidates the redo stack, as usual.
     fn record_undo(&mut self, kind: EditKind) {
+        self.edit_revision = self.edit_revision.wrapping_add(1);
         if self.suppress_undo {
             return;
         }
@@ -108,6 +111,7 @@ impl Input {
     }
 
     fn restore(&mut self, snapshot: Snapshot) {
+        self.edit_revision = self.edit_revision.wrapping_add(1);
         self.input = snapshot.input;
         self.update_indices();
         self.recalculate_display_width();
@@ -164,6 +168,7 @@ impl Input {
 
     /// Promote a continuation line and its edit history into a full command.
     pub(crate) fn prepend_continuation(&mut self, prefix: &str) {
+        self.edit_revision = self.edit_revision.wrapping_add(1);
         let chars = prefix.chars().count();
         for snapshot in self.undo_stack.iter_mut().chain(&mut self.redo_stack) {
             snapshot.input.insert_str(0, prefix);
@@ -207,11 +212,16 @@ impl Input {
         self.cursor
     }
 
+    pub(crate) fn edit_revision(&self) -> u64 {
+        self.edit_revision
+    }
+
     pub(crate) fn cursor_at_end(&self) -> bool {
         self.cursor == self.len()
     }
 
     pub fn clear(&mut self) {
+        self.edit_revision = self.edit_revision.wrapping_add(1);
         self.cursor = 0;
         self.input.clear();
         self.indices.clear();

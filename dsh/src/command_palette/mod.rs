@@ -150,8 +150,13 @@ impl SkimItem for StringItem {
 /// Command Palette UI
 pub struct CommandPalette;
 
+pub(crate) enum PaletteOutcome {
+    SearchHistory,
+    ReplaceInput(String),
+}
+
 impl CommandPalette {
-    pub async fn run(shell: &mut Shell, input: &str) -> Result<Option<String>> {
+    pub(crate) async fn run(shell: &mut Shell, input: &str) -> Result<Option<PaletteOutcome>> {
         let actions = {
             let registry = REGISTRY.read();
             registry.get_all()
@@ -187,18 +192,21 @@ impl CommandPalette {
             let output = item.output().to_string(); // this is the name
             let action_name = output.as_str();
 
-            if action_name == "Search History" {
-                return actions::search_history::select_history_command(shell).await;
+            if action_name == actions::search_history::NAME {
+                return Ok(Some(PaletteOutcome::SearchHistory));
             }
 
             if action_name == "AI Watch Current Input" {
-                return Ok(crate::repl::ai_watch::wrap_current_input(input));
+                return Ok(crate::repl::ai_watch::wrap_current_input(input)
+                    .map(PaletteOutcome::ReplaceInput));
             }
 
-            // Like Search History: the browser produces a command, and the
-            // `Action` trait has no way to return one.
+            // The browser produces a command, and the `Action` trait has no
+            // way to return one.
             if action_name == "Block Browser" {
-                return actions::block_browser::select_block_command(shell).await;
+                return Ok(actions::block_browser::select_block_command(shell)
+                    .await?
+                    .map(PaletteOutcome::ReplaceInput));
             }
 
             // Re-acquire lock to get the action (we dropped it before running Skim)

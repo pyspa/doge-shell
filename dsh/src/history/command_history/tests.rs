@@ -521,6 +521,19 @@ fn history_navigation_uses_fish_smartcase_matching() {
 }
 
 #[test]
+fn history_navigation_restarts_at_the_newest_entry_without_a_filter() {
+    let mut history = History::new();
+    assert_eq!(history.forward(), None);
+    history
+        .write_batch(vec![("echo old".into(), 1), ("echo latest".into(), 2)])
+        .unwrap();
+    assert_eq!(history.back().as_deref(), Some("echo latest"));
+    assert_eq!(history.forward(), None);
+    assert!(history.at_end());
+    assert_eq!(history.back().as_deref(), Some("echo latest"));
+}
+
+#[test]
 fn history_navigation_no_match_keeps_index_stable() {
     let mut history = History::new();
     history

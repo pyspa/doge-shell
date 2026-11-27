@@ -1,3 +1,5 @@
+//! Builtin descriptions, detailed topics, and keyword search for the help command.
+
 use super::{ShellProxy, get_all_commands};
 use dsh_types::{Context, ExitStatus};
 
@@ -17,6 +19,38 @@ struct HelpTopic {
 }
 
 const HELP_TOPICS: &[HelpTopic] = &[
+    HelpTopic {
+        name: "cd",
+        category: "navigation",
+        summary: "Change directory. With no operand, use HOME. A bare - uses OLDPWD.",
+        usage: crate::cd::CD_USAGE,
+        examples: &["cd \"work tree\"", "cd -", "cd -- -work", "cd -2"],
+        related: &["dirs", "pushd", "popd"],
+    },
+    HelpTopic {
+        name: "pushd",
+        category: "navigation",
+        summary: "Push a directory or rotate the stack to a numbered entry.",
+        usage: crate::dirstack::PUSHD_USAGE,
+        examples: &["pushd \"work tree\"", "pushd +1"],
+        related: &["dirs", "popd", "cd"],
+    },
+    HelpTopic {
+        name: "popd",
+        category: "navigation",
+        summary: "Remove the current or a numbered entry from the directory stack.",
+        usage: crate::dirstack::POPD_USAGE,
+        examples: &["popd", "popd +1"],
+        related: &["dirs", "pushd", "cd"],
+    },
+    HelpTopic {
+        name: "dirs",
+        category: "navigation",
+        summary: "Show the directory stack. Use -v to display the indexes used by cd, pushd and popd.",
+        usage: crate::dirstack::DIRS_USAGE,
+        examples: &["dirs -v", "dirs -l"],
+        related: &["cd", "pushd", "popd"],
+    },
     HelpTopic {
         name: "doctor",
         category: "setup",
@@ -308,6 +342,11 @@ fn help_output(args: &[String]) -> Result<String, String> {
                 Ok(search_output(query))
             } else if let Some(topic) = find_topic(query) {
                 Ok(topic_output(topic))
+            } else if let Some((name, description)) = visible_commands()
+                .into_iter()
+                .find(|(name, _)| name == query)
+            {
+                Ok(format!("{name}\n{description}\n"))
             } else {
                 Ok(search_output(query))
             }
@@ -333,7 +372,8 @@ fn topic_output(topic: HelpTopic) -> String {
     output.push_str(&format!("{}\n", topic.name));
     output.push_str(&format!("Category: {}\n", topic.category));
     output.push_str(&format!("Summary: {}\n", topic.summary));
-    output.push_str(&format!("Usage: {}\n", topic.usage));
+    let usage = topic.usage.strip_prefix("Usage: ").unwrap_or(topic.usage);
+    output.push_str(&format!("Usage: {usage}\n"));
 
     if !topic.examples.is_empty() {
         output.push_str("\nExamples:\n");
@@ -428,6 +468,27 @@ fn help_usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{get_all_commands, help_output};
+
+    #[test]
+    fn help_for_an_exact_command_does_not_send_the_reader_back_to_itself() {
+        for (name, _) in get_all_commands() {
+            if name.starts_with("__") || name == "project" {
+                continue;
+            }
+            let output = help_output(&[name.to_string()]).unwrap();
+            assert_eq!(output.lines().next(), Some(name));
+        }
+        for (name, example) in [
+            ("cd", "cd -"),
+            ("pushd", "pushd \"work tree\""),
+            ("popd", "popd +1"),
+            ("dirs", "dirs -v"),
+        ] {
+            let output = help_output(&[name.to_string()]).unwrap();
+            assert!(output.contains(&format!("Usage: {name}")));
+            assert!(output.lines().any(|line| line.trim() == example));
+        }
+    }
 
     #[test]
     fn help_registry_includes_updated_history_and_doctor_entries() {

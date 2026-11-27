@@ -1,4 +1,4 @@
-//! In-memory navigation over `History`: prefix-match Ctrl-P/Ctrl-N traversal (`back`/`forward`) and the lowercase cache that makes
+//! In-memory navigation over `History`: substring matching for `back`/`forward` and the lowercase cache that makes
 //! case-insensitive search allocation-free.
 use super::*;
 
@@ -107,9 +107,7 @@ impl History {
     pub fn forward(&mut self) -> Option<String> {
         let start = self.current_index + 1;
         if start >= self.histories.len() {
-            if self.search_word.is_some() {
-                self.reset_index();
-            }
+            self.reset_index();
             return None;
         }
 

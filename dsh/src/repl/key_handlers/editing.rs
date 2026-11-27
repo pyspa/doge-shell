@@ -137,6 +137,7 @@ pub(crate) async fn handle_paste_event(repl: &mut Repl<'_>, text: &str) -> Resul
     // But the user might WANT to paste and run.
     // Safe Paste means we put it in the buffer. Use insert_str.
     repl.input.insert_str(&normalized);
+    repl.discard_edited_history_draft();
     let mut renderer = TerminalRenderer::new();
     repl.print_input(&mut renderer, true, true);
     renderer.flush().ok();

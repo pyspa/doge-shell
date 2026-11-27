@@ -113,11 +113,19 @@ impl SkimCompletionFramework {
             return Some(items[0].output().to_string());
         }
 
+        Self::pick_with_skim(items, query, true)
+    }
+
+    pub(crate) fn pick_with_skim(
+        items: Vec<Candidate>,
+        query: Option<String>,
+        select_1: bool,
+    ) -> Option<String> {
         // Spawn a separate thread to run Skim, isolating it from the tokio runtime
         // This prevents "Cannot start a runtime from within a runtime" panics
         std::thread::spawn(move || {
             let mut options_builder = SkimOptionsBuilder::default();
-            options_builder.select_1(true);
+            options_builder.select_1(select_1);
             options_builder.bind(vec![
                 "Enter:accept".to_string(),
                 // Let users hide/show the preview pane on demand.

@@ -96,27 +96,25 @@ pub(crate) fn handle_history_previous(repl: &mut Repl<'_>) {
         return;
     }
 
-    // Magic Up Arrow: fish-style contains history search
-    if let Some(history_arc) = &repl.shell.cmd_history {
-        // Try to lock history (non-blocking)
-        if let Some(mut history) = history_arc.try_lock() {
-            let input_str = repl.input.as_str().to_string();
+    if let Some(history_arc) = &repl.shell.cmd_history
+        && let Some(mut history) = history_arc.try_lock()
+    {
+        if repl.history_draft.is_none() {
+            history.reset_index();
+            let input = repl.input.as_str();
+            history.search_word = (!input.is_empty()).then(|| input.to_owned());
+        }
 
-            // Check if input is empty to reset search word
-            if input_str.is_empty() {
-                history.search_word = None;
-            }
-
-            // If we are at the start of history navigation (bottom), initialize search
-            // Use at_end() to check if we are at the "newest" position
-            if history.at_end() && !input_str.is_empty() {
-                history.search_word = Some(input_str);
-            }
-
-            if let Some(cmd) = history.back() {
-                let search_word = history.search_word.clone();
-                apply_history_command(&mut repl.input, cmd, search_word.as_deref());
-            }
+        if let Some(cmd) = history.back() {
+            let draft =
+                repl.history_draft
+                    .get_or_insert_with(|| super::super::history_nav::HistoryDraft {
+                        text: repl.input.as_str().to_owned(),
+                        cursor: repl.input.cursor(),
+                        recalled_revision: repl.input.edit_revision(),
+                    });
+            apply_history_command(&mut repl.input, cmd, history.search_word.as_deref());
+            draft.recalled_revision = repl.input.edit_revision();
         }
     }
 }
@@ -129,30 +127,16 @@ pub(crate) fn handle_history_next(repl: &mut Repl<'_>) {
         return;
     }
 
-    // Magic Down Arrow
-    if let Some(history_arc) = &repl.shell.cmd_history
+    if let Some(draft) = repl.history_draft.as_mut()
+        && let Some(history_arc) = &repl.shell.cmd_history
         && let Some(mut history) = history_arc.try_lock()
     {
-        let input_str = repl.input.as_str().to_string();
-
-        // Check if input is empty to reset search word
-        if input_str.is_empty() {
-            history.search_word = None;
-        }
-
-        // If already at end, we can't go forward
-        if history.at_end() {
-            return;
-        }
-
         if let Some(cmd) = history.forward() {
-            let search_word = history.search_word.clone();
-            apply_history_command(&mut repl.input, cmd, search_word.as_deref());
-        } else {
-            // If forward() returns None, we are back at the prompt line (future)
-            // Restore the original search prefix or clear input
-            let saved_input = history.search_word.clone().unwrap_or_default();
-            repl.input.reset(saved_input);
+            apply_history_command(&mut repl.input, cmd, history.search_word.as_deref());
+            draft.recalled_revision = repl.input.edit_revision();
+        } else if let Some(draft) = repl.history_draft.take() {
+            repl.input.reset(draft.text);
+            repl.input.move_to(draft.cursor);
             history.search_word = None;
         }
     }

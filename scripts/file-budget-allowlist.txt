@@ -19,7 +19,6 @@ no-doc	dsh-builtin/src/comp_gen.rs
 no-doc	dsh-builtin/src/dmv.rs
 no-doc	dsh-builtin/src/gh_notify.rs
 no-doc	dsh-builtin/src/glog.rs
-no-doc	dsh-builtin/src/help.rs
 no-doc	dsh-builtin/src/markdown/mod.rs
 no-doc	dsh-builtin/src/safe_run.rs
 no-doc	dsh-builtin/src/serve/scanner.rs
@@ -44,10 +43,8 @@ no-doc	dsh/src/process/job_wait.rs
 no-doc	dsh/src/process/process.rs
 no-doc	dsh/src/prompt/mod.rs
 no-doc	dsh/src/repl/background_io.rs
-no-doc	dsh/src/repl/handler.rs
 no-doc	dsh/src/repl/input_analysis.rs
 no-doc	dsh/src/repl/key_handlers/execution.rs
-no-doc	dsh/src/repl/mod.rs
 no-doc	dsh/src/repl/render.rs
 no-doc	dsh/src/safety/mod.rs
 no-doc	dsh/src/shell/eval.rs

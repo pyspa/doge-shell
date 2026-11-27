@@ -1,5 +1,50 @@
 version = 1
 
+[[case]]
+id = "directory-navigation.rejects-extra-operands-before-moving"
+class = "dogesh"
+mode = "command"
+script = """
+ROOT=$(pwd); mkdir work "work tree"
+pushd work > /dev/null; cd "$ROOT"
+pwd > before; dirs -v > before-stack; SAVED=$OLDPWD
+cd work tree && echo UNEXPECTED
+echo CD:$?
+cd -1 extra && echo UNEXPECTED
+echo INDEX:$?
+pushd work tree && echo UNEXPECTED
+echo PUSH:$?
+popd +0 extra && echo UNEXPECTED
+echo POP:$?
+pwd > after; dirs -v > after-stack
+cmp before after && cmp before-stack after-stack && test "$OLDPWD" = "$SAVED" && echo PRESERVED
+cd "work tree" && echo QUOTED
+"""
+
+[case.expect]
+status = 0
+stdout_exact = "CD:1\nINDEX:1\nPUSH:1\nPOP:1\nPRESERVED\nQUOTED\n"
+stderr_contains = ["cd: too many arguments", "pushd: too many arguments", "popd: too many arguments"]
+
+[[case]]
+id = "directory-navigation.cd-option-terminator"
+class = "dogesh"
+mode = "command"
+script = """
+ROOT=$(pwd)
+mkdir ./-work ./-- ./home
+echo WORK > ./-work/tag; echo DASH > ./--/tag; echo HOME > ./home/tag
+cd -- -work && cat tag
+cd "$ROOT"; cd -- -- && cat tag
+cd "$ROOT"; -- && cat tag
+HOME="$ROOT/home"; cd -- && cat tag
+"""
+
+[case.expect]
+status = 0
+stdout_exact = "WORK\nDASH\nDASH\nHOME\n"
+stderr_exact = ""
+
 # Failed chdir must preserve the previous successful navigation target.
 [[case]]
 id = "directory-navigation.failed-absolute-cd-preserves-oldpwd"

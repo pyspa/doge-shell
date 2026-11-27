@@ -366,6 +366,12 @@ popd +1          # drop entry 1 without moving
 printed by `dirs -v`". bash counts `-N` from the other end, which is a daily papercut
 for no real gain. A bare `cd -` still means `$OLDPWD`, unchanged.
 
+Use `cd "work tree"` or `pushd "work tree"` for a directory with spaces.
+`cd`, `pushd`, and `popd` report extra arguments before changing directories.
+`cd --` goes to `HOME`. To enter a directory named `--`, use `cd ./--`
+or `cd -- --`. Use `cd ./-2` to enter a directory named `-2` without
+selecting stack entry 2.
+
 `pushd` and `popd` go through the same code path as `cd`, so directory frecency (`z`),
 `$OLDPWD` and `*on-chdir-hooks*` all keep working.
 
@@ -585,6 +591,7 @@ do its normal job, so a stray `Ctrl+x` never costs you a keystroke.
 ### History Search
 
 `Ctrl+R` opens a full-screen history picker, seeded with whatever you have already typed.
+The Command Palette (`Alt+x` → **Search History**) opens the same picker.
 Each row shows the exit status, duration, age and directory of the command, so a failed or
 slow run is recognisable at a glance. Narrower terminals drop the optional columns, keeping
 the status glyph and the command itself.
@@ -625,6 +632,10 @@ execution's project. Both sources use bounded snapshots; older matching rows may
 outside the newest 5000 entries.
 
 Set `DOGESH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
+
+At the prompt, `Up` and `Down` walk through history, filtering by the input
+present when the search started. Moving past the newest match restores the
+original input and cursor. Editing a recalled command starts a new draft.
 
 ### Completion Selection
 

@@ -172,7 +172,7 @@ impl<'a> Repl<'a> {
         Repl {
             shell,
             input: Input::new(input_config),
-            history_search: None,
+            history_draft: None,
             pending_chord: Vec::new(),
             state: ReplState::new(current.clone()),
             services: ReplServices::new(

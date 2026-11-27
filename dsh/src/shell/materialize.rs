@@ -183,7 +183,7 @@ fn build_stage_process(
         StageProcess::Builtin(BuiltinProcess::new_handler(
             "cd".to_string(),
             handler,
-            vec!["cd".to_string(), cmd],
+            vec!["cd".to_string(), "--".to_string(), cmd],
         ))
     } else {
         StageProcess::Command(Process::new(cmd, argv))

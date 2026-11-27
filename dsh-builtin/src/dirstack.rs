@@ -28,9 +28,14 @@ pub fn dirs_description() -> &'static str {
     "Show the directory stack"
 }
 
-const PUSHD_USAGE: &str = "Usage: pushd [<dir> | +N | -N]";
-const POPD_USAGE: &str = "Usage: popd [+N | -N]";
-const DIRS_USAGE: &str = "Usage: dirs [-v] [-p] [-l] [-c]";
+pub(crate) const PUSHD_USAGE: &str = "Usage: pushd [<dir> | +N | -N]";
+pub(crate) const POPD_USAGE: &str = "Usage: popd [+N | -N]";
+pub(crate) const DIRS_USAGE: &str = "Usage: dirs [-v] [-p] [-l] [-c]";
+
+pub(crate) fn too_many_arguments(ctx: &Context, name: &str, usage: &str) -> ExitStatus {
+    let _ = ctx.write_stderr(&format!("{name}: too many arguments\n{usage}"));
+    ExitStatus::ExitedWith(1)
+}
 
 /// Reads the stack, falling back to `$PWD` when the shell has not changed
 /// directory yet (the stack only materialises on the first `changepwd`).
@@ -141,6 +146,9 @@ fn pushd<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
     argv: Vec<String>,
     proxy: &mut P,
 ) -> ExitStatus {
+    if argv.len() > 2 {
+        return too_many_arguments(ctx, "pushd", PUSHD_USAGE);
+    }
     let result = match argv.get(1).map(|s| s.as_str()) {
         Some("-h") | Some("--help") => {
             ctx.write_stdout(PUSHD_USAGE).ok();
@@ -234,6 +242,9 @@ fn popd<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
     argv: Vec<String>,
     proxy: &mut P,
 ) -> ExitStatus {
+    if argv.len() > 2 {
+        return too_many_arguments(ctx, "popd", POPD_USAGE);
+    }
     let index = match argv.get(1).map(|s| s.as_str()) {
         Some("-h") | Some("--help") => {
             ctx.write_stdout(POPD_USAGE).ok();

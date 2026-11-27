@@ -1,3 +1,5 @@
+//! Interactive shell state and the entry points for input, rendering, and lifecycle management.
+
 use crate::ai_features::{AgentPolicyHandles, AiService, LiveAiService};
 use crate::command_timing;
 use crate::completion::integrated::IntegratedCompletionEngine;
@@ -178,7 +180,7 @@ pub(crate) struct BackgroundTasks {
 pub struct Repl<'a> {
     pub shell: &'a mut Shell,
     pub(crate) input: Input,
-    pub(crate) history_search: Option<String>,
+    history_draft: Option<history_nav::HistoryDraft>,
     /// Strokes collected so far for a multi-key binding such as
     /// `Ctrl-x Ctrl-e`. Empty when no chord is in progress.
     pub(crate) pending_chord: crate::repl::keybind::chord::Chord,

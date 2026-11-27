@@ -2,6 +2,8 @@ use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use std::path::Path;
 
+pub(crate) const CD_USAGE: &str = "Usage: cd [--] [<dir> | - | +N | -N]";
+
 /// Built-in cd command description
 pub fn description() -> &'static str {
     "Change the current working directory"
@@ -16,12 +18,18 @@ pub fn description() -> &'static str {
 /// - `-N` / `+N` for entry N of the directory stack (as numbered by `dirs -v`)
 /// - No argument (uses logical `HOME`; missing/empty `HOME` fails without moving)
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    let mut operands = argv.get(1..).unwrap_or_default();
+    if operands.first().is_some_and(|arg| arg == "--") {
+        operands = &operands[1..];
+    }
+    if operands.len() > 1 {
+        return crate::dirstack::too_many_arguments(ctx, "cd", CD_USAGE);
+    }
+    let operand = operands.first().map(String::as_str);
+
     // `cd -N` / `cd +N` jump into the directory stack. Checked before the
     // `-` arm below, which is plain $OLDPWD and must keep working.
-    if let Some(index) = argv
-        .get(1)
-        .and_then(|arg| crate::dirstack::parse_stack_index(arg))
-    {
+    if let Some(index) = operand.and_then(crate::dirstack::parse_stack_index) {
         return match crate::dirstack::goto_stack_index(proxy, index) {
             Ok(path) => {
                 ctx.write_stdout(&path).ok();
@@ -45,7 +53,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     };
 
     // Determine target directory based on argument
-    let dir = match argv.get(1).map(|s| s.as_str()) {
+    let dir = match operand {
         // Handle absolute paths (starting with /)
         Some(dir) if dir.starts_with('/') => dir.to_string(),
 
@@ -87,7 +95,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     // Attempt to change directory through shell proxy
     match proxy.changepwd(&dir) {
         Ok(_) => {
-            if argv.get(1).is_some_and(|arg| arg == "-") {
+            if operand == Some("-") {
                 ctx.write_stdout(&dir).ok();
             }
             ExitStatus::ExitedWith(0)

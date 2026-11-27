@@ -477,6 +477,7 @@ mod tests {
 
         let mut repl = Repl::new(&mut shell);
         repl.input.reset("status".to_string());
+        repl.input.move_to(3);
 
         let up_result = handler::handle_key_event(&mut repl, &key(KeyCode::Up, KeyModifiers::NONE))
             .await
@@ -499,6 +500,7 @@ mod tests {
                 .unwrap();
         assert!(matches!(down_result, ReplControlFlow::Continue));
         assert_eq!(repl.input.as_str(), "status");
+        assert_eq!(repl.input.cursor(), 3);
         assert!(
             !repl
                 .input
@@ -525,5 +527,42 @@ mod tests {
                 ][..]
             )
         );
+    }
+
+    #[tokio::test]
+    async fn up_down_restores_a_unicode_draft_and_starts_a_fresh_search_after_editing() {
+        let mut shell = Shell::new(Environment::new());
+        let mut history = History::new();
+        history
+            .write_batch(vec![
+                ("echo 日本語 old".into(), 1),
+                ("echo 日本語 new".into(), 2),
+            ])
+            .unwrap();
+        shell.cmd_history = Some(Arc::new(ParkingMutex::new(history)));
+        let mut repl = Repl::new(&mut shell);
+        repl.input.reset("日本語".into());
+        repl.input.move_to(1);
+
+        for code in [
+            KeyCode::Up,
+            KeyCode::Delete,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Down,
+        ] {
+            handler::handle_key_event(&mut repl, &key(code, KeyModifiers::NONE))
+                .await
+                .unwrap();
+        }
+        assert_eq!(repl.input.as_str(), "日本語");
+        assert_eq!(repl.input.cursor(), 1);
+
+        for code in [KeyCode::Up, KeyCode::Char('!'), KeyCode::Down] {
+            handler::handle_key_event(&mut repl, &key(code, KeyModifiers::NONE))
+                .await
+                .unwrap();
+        }
+        assert_eq!(repl.input.as_str(), "echo 日本語 new!");
     }
 }

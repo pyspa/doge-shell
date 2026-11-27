@@ -570,3 +570,130 @@ fn real_home_file_candidates_preserve_expansion_and_literal_tail() {
     let ghost = crate::completion::shell_path::format_path_for_token(&candidate.text, &prefix);
     assert_eq!(ghost, formatted[0].output());
 }
+
+#[tokio::test]
+async fn reference_completion_replaces_only_the_name_at_the_cursor() {
+    use skim::SkimItem;
+    let engine = cursor_engine();
+    engine
+        .environment
+        .write()
+        .set_shell_var("DSH_REFERENCE".into(), "value".into());
+    let dir = tempfile::tempdir().unwrap();
+    for (marked, selected, expected) in [
+        (
+            "echo $DSH_RE§OLD/src",
+            "$DSH_REFERENCE",
+            "echo $DSH_REFERENCE/src",
+        ),
+        (
+            "echo \"$DSH_RE§/src\"",
+            "$DSH_REFERENCE",
+            "echo \"$DSH_REFERENCE/src\"",
+        ),
+        (
+            "echo 界 && echo \"設定:${DSH_RE§}/src\"",
+            "${DSH_REFERENCE}",
+            "echo 界 && echo \"設定:${DSH_REFERENCE}/src\"",
+        ),
+        (
+            "echo \"${DSH_RE§\"",
+            "${DSH_REFERENCE}",
+            "echo \"${DSH_REFERENCE}\"",
+        ),
+        (
+            "echo $DSH_\\\nRE§/src",
+            "$DSH_REFERENCE",
+            "echo $DSH_REFERENCE/src",
+        ),
+        ("echo ~roo§/src", "~root", "echo ~root/src"),
+        (
+            "sudo git --config-env=key=$DSH_RE§/src",
+            "$DSH_REFERENCE",
+            "sudo git --config-env=key=$DSH_REFERENCE/src",
+        ),
+        (
+            "echo \"$DSH_RE\"§",
+            "$DSH_REFERENCE",
+            "echo \"$DSH_REFERENCE\"",
+        ),
+    ] {
+        let (input, cursor, _) = at(&engine, marked);
+        let result = engine.complete(&input, cursor, dir.path(), 30, None).await;
+        let candidate = result
+            .candidates
+            .iter()
+            .find(|c| c.text == selected)
+            .unwrap_or_else(|| panic!("{marked}: {:?}", result.candidates));
+        let range = result.replacement_range.unwrap();
+        let formatted = crate::completion::shell_path::format_candidates_for_range(
+            vec![candidate.to_candidate()],
+            &input,
+            range,
+        );
+        assert_eq!(
+            replace_char_range(&input, range.start, range.end, &formatted[0].output()),
+            expected,
+            "{marked}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn reference_completion_requires_an_expandable_shell_fragment() {
+    let engine = cursor_engine();
+    engine
+        .environment
+        .write()
+        .set_shell_var("DSH_REFERENCE".into(), "value".into());
+    let dir = tempfile::tempdir().unwrap();
+    for marked in [
+        "git '--config-env=$DSH_RE§'",
+        "git \"--config-env=~roo§\"",
+        r"echo \$DSH_RE§",
+        r#"echo "\$DSH_RE§""#,
+        "echo $$DSH_RE§",
+        "echo $((1+$DSH_RE§))",
+        "echo <(echo $DSH_RE§)",
+        "echo # $DSH_RE§",
+        "echo '${DSH_RE§}'",
+        "echo \"$(echo $DSH_RE§)\"",
+        "echo ${OTHER:-$DSH_RE§}",
+        "echo $DSH_RE/src§",
+        "echo $DSH_RE'§",
+    ] {
+        let (input, cursor, _) = at(&engine, marked);
+        let result = engine.complete(&input, cursor, dir.path(), 30, None).await;
+        assert!(
+            result.candidates.iter().all(|c| !matches!(
+                c.candidate_type,
+                CandidateType::VariableReference | CandidateType::HomeReference
+            )),
+            "{marked}: {:?}",
+            result.candidates
+        );
+    }
+}
+
+#[test]
+fn reference_completion_ghost_extends_the_active_name() {
+    let engine = cursor_engine();
+    for name in ["DSH_REF", "DSH_REFERENCE"] {
+        engine
+            .environment
+            .write()
+            .set_shell_var(name.into(), "value".into());
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for input in [
+        "echo $DSH_REF",
+        "echo \"設定:$DSH_REF",
+        "git --config-env=key=$DSH_REF",
+    ] {
+        assert_eq!(
+            engine.ghost_completion(input, input.chars().count(), dir.path(), None),
+            Some(format!("{input}ERENCE")),
+            "{input}"
+        );
+    }
+}

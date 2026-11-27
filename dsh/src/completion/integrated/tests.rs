@@ -655,20 +655,6 @@ async fn tilde_token_completes_user_home() {
 }
 
 #[test]
-fn special_token_dispatch_ignores_normal_tokens() {
-    let engine = IntegratedCompletionEngine::new(Environment::new());
-    assert!(engine.collect_special_token_candidates("git").is_none());
-    assert!(engine.collect_special_token_candidates("--flag").is_none());
-    // A `$VAR/subpath` token is a path, not a bare variable.
-    assert!(
-        engine
-            .collect_special_token_candidates("$HOME/foo")
-            .is_none()
-    );
-    assert!(engine.collect_special_token_candidates("$").is_some());
-}
-
-#[test]
 fn test_candidate_type_sorting() {
     let mut types = [
         CandidateType::File,

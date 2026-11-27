@@ -42,6 +42,7 @@ mod git_directory;
 mod predicates;
 mod providers;
 mod range;
+mod reference;
 mod scoring;
 mod sources;
 mod timing;
@@ -51,7 +52,7 @@ pub(crate) use predicates::matches_prefix;
 use predicates::*;
 use providers::*;
 pub use range::CompletionReplacementRange;
-pub(crate) use range::token_range_at_cursor;
+pub(crate) use range::editable_token_range_at_cursor;
 use range::*;
 use scoring::*;
 use timing::*;
@@ -441,6 +442,8 @@ impl IntegratedCompletionEngine {
         );
 
         let mut timing = CompletionTiming::start();
+        let input_len = input.chars().count();
+        let cursor_pos = cursor_pos.min(input_len);
 
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
         let completion_dir = self.completion_directory(&parsed_command_line, current_dir);
@@ -457,6 +460,28 @@ impl IntegratedCompletionEngine {
                 replacement_range: None,
             };
         }
+        // Variable ($VAR / ${VAR) and user-home (~user) references are completed
+        // uniformly across all commands, independent of per-command definitions.
+        // Handled before the cache so freshly `export`ed variables show up
+        // immediately, and the active name owns its own replacement range.
+        if let Some((reference, range)) =
+            reference::Reference::at_cursor(&parsed_command_line, cursor_pos)
+            && let Some(mut candidates) = reference.candidates(self)
+        {
+            candidates.truncate(max_results);
+            timing.finish(input, "special_token");
+            return CompletionResult {
+                disposition: if candidates.is_empty() {
+                    CompletionDisposition::Suppressed
+                } else {
+                    CompletionDisposition::Allowed
+                },
+                candidates,
+                framework: CompletionFrameworkKind::Skim,
+                replacement_range: Some(range),
+            };
+        }
+
         let completion_dir = completion_dir.unwrap();
         let source_request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
         let request = CompletionRequest::new(input, &completion_dir, max_results, cursor_pos);
@@ -471,7 +496,7 @@ impl IntegratedCompletionEngine {
         // request has already observed only part of the old/new state, so a
         // later "pending became false" is not proof that this request built a
         // stable snapshot. A later request may publish the settled result.
-        let mut cache_allowed = cursor_pos == input.chars().count()
+        let mut cache_allowed = cursor_pos == input_len
             && !parsed_command_line
                 .source
                 .as_ref()
@@ -481,22 +506,6 @@ impl IntegratedCompletionEngine {
             && !self.dynamic.has_async_fallback()
             && !self.dynamic.has_pending_refresh();
         timing.mark("parse");
-
-        // Variable ($VAR / ${VAR) and user-home (~user) references are completed
-        // uniformly across all commands, independent of per-command definitions.
-        // Handled before the cache so freshly `export`ed variables show up
-        // immediately (enumeration is cheap: no subprocess, just map lookups).
-        if let Some(candidates) =
-            self.collect_special_token_candidates(&parsed_command_line.current_token)
-        {
-            timing.finish(request.input, "special_token");
-            return CompletionResult {
-                disposition: CompletionDisposition::Allowed,
-                candidates,
-                framework: CompletionFrameworkKind::Skim,
-                replacement_range,
-            };
-        }
 
         // File and command candidates depend on the request's directory and
         // logical shell environment, even when the input text is unchanged.

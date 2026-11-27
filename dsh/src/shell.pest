@@ -262,3 +262,14 @@ completion_redirect_in = _{ "<" ~ (line_continuation* ~ "&")? }
 completion_capture = { "|" ~ line_continuation* ~ ">" }
 completion_struct = { "|" ~ line_continuation* ~ ":" ~ (sp | line_continuation)* ~ linebreak? ~ (scan_lisp | struct_pipe_dsl)? }
 completion_unsupported = { ("|" ~ line_continuation* ~ "&") | ")" }
+
+// Only shell references exposed directly in this word can be completed.
+// Consume nested bodies with the same opaque scanner used by completion_word.
+completion_reference_word = { SOI ~ (completion_ref_double | completion_ref_dollar | scan_part)* ~ EOI }
+completion_ref_double = _{ "\"" ~ (completion_ref_dollar | scan_escape | (!"\"" ~ ANY))* ~ (completion_ref_close_quote | EOI) }
+completion_ref_close_quote = { "\"" }
+completion_ref_dollar = _{ scan_arithmetic | scan_substitution | completion_ref_braced | scan_parameter
+    | ("$" ~ line_continuation* ~ (invocation_special | special_var | ASCII_DIGIT)) | completion_ref_plain }
+completion_ref_braced = { "$" ~ line_continuation* ~ "{" ~ completion_ref_name ~ ("}" | &("\"" ~ EOI) | EOI) }
+completion_ref_plain = { "$" ~ completion_ref_name }
+completion_ref_name = @{ line_continuation* ~ ((ASCII_ALPHA | "_") ~ (line_continuation* ~ var_name_char)*)? ~ line_continuation* }

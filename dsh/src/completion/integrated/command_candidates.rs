@@ -1,6 +1,4 @@
-//! Completing the command position and the tokens that behave the same way
-//! whatever the command is (`$VAR`, `~user`), plus the one-level unwrap that
-//! lets `sudo pacman -R <TAB>` reach pacman's own completion.
+//! Command candidates, shell state snapshots and wrapper lookup.
 use super::*;
 use crate::completion::generator::SystemCommandCacheTicket;
 
@@ -60,45 +58,6 @@ impl IntegratedCompletionEngine {
         scope.finish()
     }
 
-    /// Collect candidates for "special" tokens that complete the same way
-    /// regardless of the command: environment/shell variable references
-    /// (`$VAR`, `${VAR`) and user-home references (`~user`). Returns `None`
-    /// when the current token is not one of these, so normal completion
-    /// proceeds unchanged.
-    pub(super) fn collect_special_token_candidates(
-        &self,
-        current_token: &str,
-    ) -> Option<Vec<EnhancedCandidate>> {
-        // Variables expand inside double quotes, but single-quoted variables
-        // and any quoted tilde are literal filenames.
-        let home_reference = current_token.starts_with('~');
-        let current_token = current_token.strip_prefix('"').unwrap_or(current_token);
-        let current_token = current_token.trim_end_matches(['"', '\'']);
-        if let Some(rest) = current_token.strip_prefix("${") {
-            // Still typing the name inside `${...}` (no closing brace / path yet).
-            if rest.contains('}') || rest.contains('/') {
-                return None;
-            }
-            return Some(self.variable_candidates(rest, |name| format!("${{{name}}}")));
-        }
-        if let Some(rest) = current_token.strip_prefix('$') {
-            // `$NAME`. A `/` means it is really a path after expansion, not a
-            // bare variable, so leave it to path completion.
-            if rest.contains('/') {
-                return None;
-            }
-            return Some(self.variable_candidates(rest, |name| format!("${name}")));
-        }
-        if home_reference && let Some(rest) = current_token.strip_prefix('~') {
-            // `~user`. Once a `/` appears it is a path under the home directory.
-            if rest.contains('/') {
-                return None;
-            }
-            return Some(tilde_user_candidates(rest));
-        }
-        None
-    }
-
     /// Build variable-name candidates from the shell environment. Names come
     /// from shell variables only (inherited names are already seeded there),
     /// deduplicated and sorted. `format_value` renders the
@@ -108,24 +67,13 @@ impl IntegratedCompletionEngine {
         prefix: &str,
         format_value: impl Fn(&str) -> String,
     ) -> Vec<EnhancedCandidate> {
-        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        {
-            let env = self.environment.read();
-            names.extend(env.variable_state.variables.keys().cloned());
-        }
-
+        let env = self.environment.read();
+        let mut names: Vec<_> = reference::matching_variable_names(&env, prefix).collect();
+        names.sort_unstable();
         names
             .into_iter()
-            .filter(|name| {
-                let mut chars = name.chars();
-                chars
-                    .next()
-                    .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
-                    && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-                    && (prefix.is_empty() || name.starts_with(prefix))
-            })
             .map(|name| EnhancedCandidate {
-                text: format_value(&name),
+                text: format_value(name),
                 description: Some("environment variable".to_string()),
                 candidate_type: CandidateType::VariableReference,
                 priority: 140,

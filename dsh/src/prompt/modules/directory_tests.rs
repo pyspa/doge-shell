@@ -78,6 +78,7 @@ fn cwd_safety_directory_preserves_abbreviation_unicode_and_git_paths() {
     );
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join(".git")).unwrap();
+    std::fs::write(root.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let output = render(root.path(), None);
     assert_eq!(output, root.path().file_name().unwrap().to_string_lossy());
 }

@@ -67,11 +67,14 @@ fn event_project_uses_current_markers_and_exact_context_strings() {
     let history = history_at(dir.path());
     // Bound marker lookup inside the fixture, regardless of ancestor repositories.
     std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let repo = dir.path().join("repo");
     let nested = repo.join("nested");
     std::fs::create_dir_all(&nested).unwrap();
     // Worktree/submodule .git files use the same marker semantics as directories.
-    std::fs::write(repo.join(".git"), "gitdir: /synthetic-target\n").unwrap();
+    std::fs::create_dir(repo.join("metadata")).unwrap();
+    std::fs::write(repo.join("metadata/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(repo.join(".git"), "gitdir: metadata\n").unwrap();
     let cwd = nested.to_string_lossy().into_owned();
     let root = repo.to_string_lossy().into_owned();
     let conn = history.db.as_ref().unwrap().get_connection();

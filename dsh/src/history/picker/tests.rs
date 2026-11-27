@@ -439,13 +439,14 @@ fn execution_project_scope_resolves_lazily_and_caches_context() {
     p.on_key(ctrl('e'));
     assert!(p.selected_entry().unwrap().context.is_none());
     std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     p.base.current_project = Some(dir.path().to_string_lossy().into_owned());
     for _ in 0..3 {
         p.on_key(ctrl('r'));
     }
     assert_eq!(p.matched(), 1);
     assert_eq!(p.selected_entry().unwrap().context, p.base.current_project);
-    std::fs::remove_dir(dir.path().join(".git")).unwrap();
+    std::fs::remove_dir_all(dir.path().join(".git")).unwrap();
     p.on_key(ctrl('e'));
     p.on_key(ctrl('e'));
     assert_eq!(p.matched(), 1);

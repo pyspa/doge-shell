@@ -1415,6 +1415,7 @@ fn git_root_fallback_uses_logical_git_only() {
 fn git_root_marker_precedes_command_fallback() {
     let root = tempdir().unwrap();
     std::fs::create_dir(root.path().join(".git")).unwrap();
+    std::fs::write(root.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let work = root.path().join("unmarked/child");
     std::fs::create_dir_all(&work).unwrap();
     let environment = prompt_test_environment("");
@@ -1423,6 +1424,30 @@ fn git_root_marker_precedes_command_fallback() {
         block_on_probe(super::find_git_root_async(runtime)),
         Some(root.path().to_path_buf())
     );
+}
+
+#[test]
+fn changing_directory_selects_nearest_git_root_before_rendering() {
+    let temp = tempdir().unwrap();
+    let outer = temp.path();
+    let inner = outer.join("projects/inner");
+    let child = inner.join("src");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::create_dir(outer.join(".git")).unwrap();
+    std::fs::create_dir(inner.join(".git")).unwrap();
+    std::fs::write(inner.join(".git/HEAD"), "ref: refs/heads/develop\n").unwrap();
+
+    let mut prompt = Prompt::new(outer.to_owned(), "> ".into());
+    assert_ne!(prompt.git_root_path().as_deref(), Some(outer));
+    prompt.set_current(&child);
+    assert_eq!(prompt.git_root_path().as_deref(), Some(inner.as_path()));
+    assert_eq!(prompt.get_head_branch().as_deref(), Some("develop"));
+
+    std::fs::write(outer.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    prompt.set_current(outer);
+    assert_eq!(prompt.get_head_branch().as_deref(), Some("main"));
+    prompt.set_current(&child);
+    assert_eq!(prompt.get_head_branch().as_deref(), Some("develop"));
 }
 
 /// Stale git refreshes never overwrite a newer runtime: the Git probe

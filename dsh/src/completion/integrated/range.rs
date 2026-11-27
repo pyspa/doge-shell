@@ -47,10 +47,20 @@ pub(crate) fn token_range_at_cursor(
     input: &str,
     cursor_pos: usize,
 ) -> Option<CompletionReplacementRange> {
+    editable_token_range_at_cursor(input, cursor_pos, 0)
+}
+
+/// Only edit the current prompt. A quoted word can start on a previous
+/// prompt while the reference under the cursor is entirely on this one.
+pub(crate) fn editable_token_range_at_cursor(
+    input: &str,
+    cursor_pos: usize,
+    editable_start: usize,
+) -> Option<CompletionReplacementRange> {
     let cursor_pos = cursor_pos.min(input.chars().count());
     let cursor_byte = crate::completion::command_segment::char_to_byte(input, cursor_pos);
     let parsed = parser::CommandLineParser::new().parse(input, cursor_byte);
-    let source = parsed.source?;
+    let source = parsed.source.as_ref()?;
     if source.suppressed {
         return None;
     }
@@ -64,7 +74,11 @@ pub(crate) fn token_range_at_cursor(
         start: offset + word.char_start,
         end: offset + word.char_end,
     };
-    Some(token_range)
+    if token_range.start >= editable_start {
+        return Some(token_range);
+    }
+    let (_, reference_range) = reference::Reference::at_cursor(&parsed, cursor_pos)?;
+    (reference_range.start >= editable_start).then_some(reference_range)
 }
 
 pub(super) fn slice_chars(input: &str, start: usize, end: usize) -> String {
@@ -94,30 +108,4 @@ pub(super) fn replace_char_range(
         result.push_str(replacement);
     }
     result
-}
-
-/// User-home (`~user`) candidates, reusing the `/etc/passwd`-backed user
-/// generator. `prefix` is the partial user name (the part after `~`); the
-/// returned text keeps the leading `~` so it replaces the whole token.
-pub(super) fn tilde_user_candidates(prefix: &str) -> Vec<EnhancedCandidate> {
-    let generator = crate::completion::generators::user::UserGenerator::new();
-    match generator.generate_candidates(prefix) {
-        Ok(users) => users
-            .into_iter()
-            .filter(|user| {
-                !user.text.is_empty()
-                    && user
-                        .text
-                        .chars()
-                        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
-            })
-            .map(|user| EnhancedCandidate {
-                text: format!("~{}", user.text),
-                description: user.description,
-                candidate_type: CandidateType::HomeReference,
-                priority: 140,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    }
 }

@@ -130,16 +130,13 @@ pub(crate) async fn handle_trigger_completion(
     let cursor = prefix_chars + repl.input.cursor();
     let (expanded, marker, label) = match tab_action(&source, cursor) {
         TabAction::Shell => {
-            // The selector edits only the current line. A word opened on a
-            // previous prompt cannot be replaced within that buffer.
-            let Some(lexical_range) =
-                completion::integrated::token_range_at_cursor(&source, cursor)
-            else {
+            let Some(lexical_range) = completion::integrated::editable_token_range_at_cursor(
+                &source,
+                cursor,
+                prefix_chars,
+            ) else {
                 return Ok((prefix_bytes == 0).then_some(ReplControlFlow::Continue));
             };
-            if lexical_range.start < prefix_chars {
-                return Ok(None);
-            }
             let source = source.into_owned();
             return complete_shell_input(repl, &source, prefix_bytes, cursor, lexical_range)
                 .await

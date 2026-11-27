@@ -25,28 +25,23 @@ impl IntegratedCompletionEngine {
         {
             return None;
         }
+        if let Some((reference, range)) =
+            reference::Reference::at_cursor(&parsed_command_line, cursor_pos)
+        {
+            if range.end != cursor_pos {
+                return None;
+            }
+            let typed = slice_chars(input, range.start, range.end);
+            return reference
+                .ghost_suffix(self, &typed)
+                .map(|suffix| format!("{input}{suffix}"));
+        }
+
         let replacement_range = completion_replacement_range(
             input,
             cursor_pos,
             &self.dynamic_provider_target(&parsed_command_line),
         )?;
-
-        // Variable / user-home references: predict the first matching candidate.
-        if let Some(candidates) =
-            self.collect_special_token_candidates(&parsed_command_line.current_token)
-        {
-            let candidate = candidates.first()?;
-            let full = replace_char_range(
-                input,
-                replacement_range.start,
-                replacement_range.end,
-                &ghost_insertion(candidate, input, replacement_range),
-            );
-            if full == input || !full.starts_with(input) {
-                return None;
-            }
-            return Some(full);
-        }
 
         let mut candidates = self.collect_dynamic_candidates_cached(&request, &parsed_command_line);
         candidates.extend(

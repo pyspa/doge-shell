@@ -246,3 +246,62 @@ fn tab_sends_full_logical_source_and_character_cursor_to_provider_and_hook() {
         );
     });
 }
+
+#[tokio::test]
+async fn tab_completes_only_the_reference_in_the_editable_line() {
+    let mut shell = fixture_shell();
+    shell
+        .environment
+        .write()
+        .set_shell_var("DSH_REFERENCE".into(), "value".into());
+    let mut repl = Repl::new(&mut shell);
+    for (prefix, marked, expected) in [
+        (
+            "echo 前 |\n",
+            "echo \"設定:$DSH_RE§/src\" tail",
+            "echo \"設定:$DSH_REFERENCE/src\" tail",
+        ),
+        (
+            "echo \"説明\n",
+            "$DSH_RE§/src\" tail",
+            "$DSH_REFERENCE/src\" tail",
+        ),
+        ("echo \"$DSH_\\\n", "RE§/src\"", "RE/src\""),
+        (
+            "echo 前 |\n",
+            "echo \"設定:$DSH_MISSING§/src\" tail",
+            "echo \"設定:$DSH_MISSING/src\" tail",
+        ),
+    ] {
+        repl.state.multiline_buffer = prefix.into();
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let original = marked.replace('§', "");
+        repl.input.reset(original.clone());
+        repl.input.move_to(cursor);
+        handle_trigger_completion(&mut repl).await.unwrap();
+        assert_eq!(repl.input.as_str(), expected);
+        assert_eq!(repl.state.multiline_buffer, prefix);
+        if expected != original {
+            assert!(repl.input.undo());
+            assert_eq!(repl.input.as_str(), original);
+            assert_eq!(repl.input.cursor(), cursor);
+        }
+    }
+}
+
+#[tokio::test]
+async fn tab_completes_a_literal_filename_when_the_user_name_does_not_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = "~dsh-reference-unknown-user.txt";
+    std::fs::write(dir.path().join(file), "").unwrap();
+    let mut shell = fixture_shell();
+    let mut repl = Repl::new(&mut shell);
+    repl.completion_ui
+        .integrated_completion
+        .initialize_command_completion()
+        .unwrap();
+    repl.terminal_ui.prompt.write().set_current(dir.path());
+    repl.input.reset("cat ~dsh-reference-unknown-us".into());
+    handle_trigger_completion(&mut repl).await.unwrap();
+    assert_eq!(repl.input.as_str(), format!("cat \\{file}"));
+}

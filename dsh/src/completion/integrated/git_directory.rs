@@ -11,7 +11,7 @@ impl IntegratedCompletionEngine {
         input: &str,
         cursor: usize,
         current_dir: &Path,
-    ) -> Option<FileSystemContext> {
+    ) -> Option<(FileSystemContext, bool)> {
         let parsed = self.convert_to_parsed_command_line(input, cursor);
         if parsed
             .source
@@ -21,7 +21,22 @@ impl IntegratedCompletionEngine {
             return None;
         }
         let directory = self.completion_directory(&parsed, current_dir)?;
-        Some(self.filesystem_context(&directory))
+        Some((
+            self.filesystem_context(&directory),
+            self.directory_argument(&self.dynamic_provider_target(&parsed)),
+        ))
+    }
+
+    pub(crate) fn requires_directory(&self, input: &str, cursor: usize) -> bool {
+        let parsed = self.convert_to_parsed_command_line(input, cursor);
+        self.directory_argument(&self.dynamic_provider_target(&parsed))
+    }
+
+    pub(super) fn directory_argument(&self, target: &ParsedCommandLine) -> bool {
+        matches!(
+            self.argument_type_for_completion_context(target),
+            Some(ArgumentType::Directory)
+        )
     }
 
     pub(super) fn completion_directory<'a>(

@@ -485,11 +485,8 @@ impl IntegratedCompletionEngine {
         let completion_dir = completion_dir.unwrap();
         let source_request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
         let request = CompletionRequest::new(input, &completion_dir, max_results, cursor_pos);
-        let replacement_range = completion_replacement_range(
-            input,
-            cursor_pos,
-            &self.dynamic_provider_target(&parsed_command_line),
-        );
+        let target = self.dynamic_provider_target(&parsed_command_line);
+        let replacement_range = completion_replacement_range(input, cursor_pos, &target);
         let dynamic_generation = self.dynamic.refresh_generation();
         // A request that starts while dynamic data is in flight stays
         // non-cacheable for its lifetime: the refresh may finish after this
@@ -603,7 +600,9 @@ impl IntegratedCompletionEngine {
         // 2. JSON-based command completion
         let command_batch = self.collect_command_candidates(&request, &parsed_command_line);
         timing.mark("json");
-        if !aggregator.extend(command_batch) {
+        // Broad external and fish fallbacks do not know the JSON argument
+        // type. A directory slot is already covered by the typed collector.
+        if !aggregator.extend(command_batch) || self.directory_argument(&target) {
             let mut results = aggregator.finalize(history);
             timing.mark("finalize");
             results.replacement_range = replacement_range;

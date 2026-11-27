@@ -81,3 +81,30 @@ fn path_completion_event_reanalyzes_current_input_without_a_new_key() {
             assert_ne!(repl.input.completion.as_deref(), Some("ghost-complete"));
         });
 }
+
+#[tokio::test]
+async fn suggestion_mode_off_does_not_request_ai_backfill() {
+    let env = Environment::new_synthetic();
+    env.write().completion_state.input_preferences.ai_backfill = true;
+    let mut shell = crate::shell::Shell::new(env.clone());
+    let mut repl = Repl::new(&mut shell);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    repl.ai_ui
+        .suggestion_manager
+        .engine
+        .set_ai_backend(Some(Arc::new(CountAi(calls.clone()))));
+    repl.ai_ui.last_input_change_time = Instant::now() - Duration::from_secs(1);
+    repl.input.reset("echo zz-no-local-autosuggestion".into());
+
+    env.write()
+        .set_suggestion_mode(crate::suggestion::SuggestionMode::Off);
+    repl.print_input(&mut Vec::new(), false, true);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(repl.inline_suggestion_suffix().is_none());
+
+    env.write()
+        .set_suggestion_mode(crate::suggestion::SuggestionMode::Ghost);
+    repl.print_input(&mut Vec::new(), false, true);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(repl.inline_suggestion_suffix(), Some("ai"));
+}

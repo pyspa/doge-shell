@@ -94,30 +94,17 @@ async fn cursor_navigation_refreshes_the_tab_expansion_hint_at_the_marker() {
 }
 
 #[tokio::test]
-async fn refreshed_analysis_clears_stale_completion_before_accepting() {
-    let mut shell = Shell::new(Environment::new());
+async fn redraw_clears_stale_completion_before_accepting() {
+    let mut shell = Shell::new(Environment::new_synthetic());
     let mut repl = Repl::new(&mut shell);
-    repl.input.reset("echo audit-unique-123".into());
-    for cached in [false, true] {
+    let line = "echo audit-unique-123";
+    repl.input.reset(line.into());
+    for _ in 0..2 {
         repl.input.completion = Some("echo".into());
-        let mut suffix = None;
-        if cached {
-            super::apply_cached_analysis(&mut repl, &mut suffix, None, None);
-        } else {
-            super::apply_fresh_analysis(
-                &mut repl,
-                &mut suffix,
-                super::InputAnalysis {
-                    completion_full: None,
-                    completion: None,
-                    color_ranges: None,
-                    can_execute: true,
-                },
-            );
-        }
+        repl.print_input(&mut Vec::new(), false, true);
         assert!(repl.input.completion.is_none());
         crate::repl::key_handlers::completion::handle_accept_completion(&mut repl);
-        assert_eq!(repl.input.as_str(), "echo audit-unique-123");
+        assert_eq!(repl.input.as_str(), line);
     }
 }
 
@@ -284,14 +271,9 @@ async fn executable_completion_uses_the_logical_continuation_context() {
         // cached without a candidate, such as when the PATH scan settles.
         repl.input.reset(line.into());
         repl.ai_ui.suggestion_manager.clear();
-        repl.refresh_inline_suggestion();
-        assert!(repl.input.completion.is_none());
+        repl.refresh_inline_suggestion(true);
         assert_eq!(
-            repl.ai_ui
-                .suggestion_manager
-                .active
-                .as_ref()
-                .map(|suggestion| suggestion.full.as_str()),
+            repl.input.completion.as_deref(),
             (expected != line).then_some(expected)
         );
         repl.handle_key_event(&right).await.unwrap();
@@ -308,42 +290,6 @@ async fn accepting_stale_completion_preserves_current_input() {
     repl.input.completion = Some("echo".into());
     crate::repl::key_handlers::completion::handle_accept_completion(&mut repl);
     assert_eq!(repl.input.as_str(), "echo audit-unique-123");
-}
-
-#[tokio::test]
-async fn history_completion_remains_acceptable_after_fresh_and_cached_analysis() {
-    let mut shell = Shell::new(Environment::new());
-    let mut repl = Repl::new(&mut shell);
-    repl.input.reset("echo audit".into());
-    let suffix = "-history".to_string();
-    let analysis = repl.analyze_input("echo audit", Some(suffix.clone()));
-    let mut completion = Some(suffix);
-    super::apply_fresh_analysis(&mut repl, &mut completion, analysis);
-    assert_eq!(repl.input.completion.as_deref(), Some("echo audit-history"));
-    let cached = repl.ai_ui.last_analysis_result.as_ref().unwrap();
-    let (full, suffix) = (cached.completion_full.clone(), cached.completion.clone());
-    // Whether history is temporarily locked or reports another candidate,
-    // the cached displayed suffix and the accepted full value must agree.
-    for fresh_suffix in [None, Some("-different".into())] {
-        repl.input.reset("echo audit".into());
-        completion = fresh_suffix;
-        super::apply_cached_analysis(&mut repl, &mut completion, full.clone(), suffix.clone());
-        assert_eq!(completion.as_deref(), Some("-history"));
-        crate::repl::key_handlers::completion::handle_accept_completion(&mut repl);
-        assert_eq!(repl.input.as_str(), "echo audit-history");
-    }
-}
-
-fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
-}
-
-fn test_input(text: &str) -> Input {
-    let mut input = Input::new(InputConfig::default());
-    input.reset(text.to_string());
-    input
 }
 
 #[tokio::test]
@@ -675,4 +621,147 @@ fn transient_prompt_skips_clear_when_terminal_width_is_unknown() {
     render_transient_prompt_to(&mut output, &input, 2, 0).expect("render transient prompt");
 
     assert!(output.is_empty());
+}
+
+#[tokio::test]
+async fn dismissal_and_suggestion_off_prevent_automatic_history_acceptance() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let environment = Environment::new_synthetic();
+    let mut shell = Shell::new(environment.clone());
+    let mut history = crate::history::History::new();
+    let line = "echo sample";
+    let extension = "echo sample data one";
+    history.write_batch(vec![(extension.into(), 1)]).unwrap();
+    shell.cmd_history = Some(std::sync::Arc::new(parking_lot::Mutex::new(history)));
+    let mut repl = Repl::new(&mut shell);
+    repl.input.reset(line.into());
+    let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    let mut out = Vec::new();
+    repl.print_input(&mut out, false, true);
+    assert!(contains_bytes(&out, b"data one"));
+
+    repl.handle_key_event(&esc).await.unwrap();
+    repl.handle_completion_refresh();
+    repl.handle_key_event(&right).await.unwrap();
+    assert_eq!(repl.input.as_str(), line);
+
+    repl.input.insert('x');
+    repl.input.backspace();
+    repl.print_input(&mut Vec::new(), false, true);
+    environment
+        .write()
+        .set_suggestion_mode(crate::suggestion::SuggestionMode::Off);
+    repl.handle_key_event(&right).await.unwrap();
+    assert_eq!(repl.input.as_str(), line);
+    environment
+        .write()
+        .set_suggestion_mode(crate::suggestion::SuggestionMode::Ghost);
+    repl.print_input(&mut Vec::new(), false, true);
+    repl.handle_key_event(&right).await.unwrap();
+    assert_eq!(repl.input.as_str(), extension);
+}
+
+#[tokio::test]
+async fn history_ghost_acceptance_keys_agree_after_paste_and_regular_redraw() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut shell = Shell::new(Environment::new_synthetic());
+    let mut history = crate::history::History::new();
+    history
+        .write_batch(vec![("echo sample data one".into(), 1)])
+        .unwrap();
+    shell.cmd_history = Some(std::sync::Arc::new(parking_lot::Mutex::new(history)));
+    let mut repl = Repl::new(&mut shell);
+    for pasted in [false, true] {
+        for (key, expected) in [
+            (KeyCode::Right, "echo sample data "),
+            (KeyCode::Char('f'), "echo sample data one"),
+        ] {
+            repl.input.clear();
+            if pasted {
+                crate::repl::key_handlers::editing::handle_paste_event(&mut repl, "echo sample")
+                    .await
+                    .unwrap();
+            } else {
+                repl.input.reset("echo sample".into());
+                repl.print_input(&mut Vec::new(), false, true);
+            }
+            repl.handle_key_event(&KeyEvent::new(key, KeyModifiers::CONTROL))
+                .await
+                .unwrap();
+            assert_eq!(repl.input.as_str(), expected, "{pasted} {key:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn git_subcommand_ghost_beats_a_local_name_after_typing_and_paste() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sta-local-only"), "").unwrap();
+    let mut shell = Shell::new(Environment::new_synthetic());
+    let mut repl = Repl::new(&mut shell);
+    repl.completion_ui
+        .integrated_completion
+        .initialize_command_completion()
+        .unwrap();
+    repl.terminal_ui.prompt.write().set_current(dir.path());
+    let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+    for pasted in [false, true] {
+        repl.input.clear();
+        if pasted {
+            crate::repl::key_handlers::editing::handle_paste_event(&mut repl, "git sta")
+                .await
+                .unwrap();
+        } else {
+            for ch in "git sta".chars() {
+                repl.handle_key_event(&KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+                    .await
+                    .unwrap();
+            }
+        }
+        repl.handle_key_event(&right).await.unwrap();
+        assert_eq!(repl.input.as_str(), "git stash", "{pasted}");
+    }
+}
+
+fn test_input(text: &str) -> Input {
+    let mut input = Input::new(InputConfig::default());
+    input.reset(text.to_string());
+    input
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+#[tokio::test]
+async fn redraw_keeps_displayed_history_available_when_history_is_locked() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut shell = Shell::new(Environment::new_synthetic());
+    let mut history = crate::history::History::new();
+    history
+        .write_batch(vec![("echo sample from history".into(), 1)])
+        .unwrap();
+    let history = std::sync::Arc::new(parking_lot::Mutex::new(history));
+    shell.cmd_history = Some(history.clone());
+    let mut repl = Repl::new(&mut shell);
+    repl.input.reset("echo sample".into());
+    repl.print_input(&mut Vec::new(), false, true);
+    {
+        let _locked = history.lock();
+        let mut out = Vec::new();
+        repl.print_input(&mut out, false, false);
+        assert!(contains_bytes(&out, b" from history"));
+    }
+    repl.handle_key_event(&KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+        .await
+        .unwrap();
+    assert_eq!(repl.input.as_str(), "echo sample from history");
 }

@@ -2,6 +2,7 @@
 //! which is why it only consults sources that are already cheap or cached and
 //! never blocks the key handler on a refresh.
 use super::*;
+use crate::completion::generators::{option::OptionGenerator, subcommand::SubCommandGenerator};
 
 impl IntegratedCompletionEngine {
     pub fn ghost_completion(
@@ -77,33 +78,38 @@ impl IntegratedCompletionEngine {
     ) -> Vec<EnhancedCandidate> {
         let target = self.dynamic_provider_target(parsed_command_line);
         let parsed_command_line = target.as_ref();
-        match parsed_command_line.completion_context {
-            parser::CompletionContext::SubCommand
-            | parser::CompletionContext::ShortOption
-            | parser::CompletionContext::LongOption => {}
+        if matches!(
+            parsed_command_line.completion_context,
             parser::CompletionContext::Argument { .. }
-            | parser::CompletionContext::OptionValue { .. } => {
-                return self
-                    .collect_safe_value_candidates_for_ghost(parsed_command_line, current_dir);
-            }
-            _ => return Vec::new(),
+                | parser::CompletionContext::OptionValue { .. }
+        ) {
+            return self.collect_safe_value_candidates_for_ghost(parsed_command_line, current_dir);
         }
 
         self.ensure_command_completion_loaded(&parsed_command_line.command);
-        let (environment_names, system_command_ticket, filesystem) =
-            self.runtime_completion_snapshot(current_dir);
         let db_lock = self.command_completion.lock();
-        if db_lock.get_command(&parsed_command_line.command).is_none() {
+        let Some(definition) = db_lock.get_command(&parsed_command_line.command) else {
             return Vec::new();
-        }
+        };
 
-        let completion_generator = CompletionGenerator::with_runtime_environment_ticket(
-            &db_lock,
-            &environment_names,
-            system_command_ticket,
-        )
-        .with_filesystem_context(&filesystem);
-        match completion_generator.generate_candidates(parsed_command_line) {
+        // The TAB generator can walk a directory or execute a Script when
+        // subcommands and positional arguments share a slot. Ghost text only
+        // needs the static names here. Values have their own cached-only path.
+        let candidates = match parsed_command_line.completion_context {
+            parser::CompletionContext::SubCommand => {
+                SubCommandGenerator::generate_candidates(definition, parsed_command_line, |_, _| {
+                    Ok(Vec::new())
+                })
+            }
+            parser::CompletionContext::ShortOption => {
+                OptionGenerator::generate_short_option_candidates(definition, parsed_command_line)
+            }
+            parser::CompletionContext::LongOption => {
+                OptionGenerator::generate_long_option_candidates(definition, parsed_command_line)
+            }
+            _ => return Vec::new(),
+        };
+        match candidates {
             Ok(candidates) => candidates
                 .into_iter()
                 .map(|candidate| self.convert_to_enhanced_candidate(candidate))

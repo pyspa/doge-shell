@@ -47,7 +47,7 @@ const GIT_STATUS_THROTTLE_MS: u64 = 200;
 mod state;
 use state::*;
 mod cache;
-use cache::*;
+use cache::FileContextCache;
 mod abbreviation;
 pub(crate) mod ai_watch;
 pub(crate) mod background_io;
@@ -82,7 +82,7 @@ pub mod macro_utils;
 mod repl_ai; // Extracted AI logic
 
 use background_io::{BackgroundIoCoordinator, BackgroundIoEvent};
-pub(crate) use input_analysis::{CachedInputAnalysis, InputAnalysis};
+pub(crate) use input_analysis::InputAnalysis;
 use services::ReplServices;
 
 /// Format directory entries for AI context
@@ -147,7 +147,7 @@ pub(crate) struct CompletionUiState {
     pub(crate) path_feedback: path_feedback::PathFeedback,
     pub(crate) completion: Completion,
     pub(crate) integrated_completion: IntegratedCompletionEngine,
-    pub(crate) cache: HistoryCache,
+    pub(crate) dismissed_suggestion_revision: Option<u64>,
 }
 
 pub(crate) struct AiUiState {
@@ -162,7 +162,7 @@ pub(crate) struct AiUiState {
     pub(crate) ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
     pub(crate) explanation_dirty: bool,
     pub(crate) last_analyzed_input: String,
-    pub(crate) last_analysis_result: Option<CachedInputAnalysis>,
+    pub(crate) forced_suggestion_revision: Option<u64>,
 }
 
 pub(crate) struct BackgroundTasks {
@@ -439,28 +439,48 @@ impl<'a> Repl<'a> {
         render::compute_color_ranges_from_pairs(self, pairs, input)
     }
 
+    pub(crate) fn automatic_suggestion_allowed(&self) -> bool {
+        self.input.cursor_at_end()
+            && self.ai_ui.input_preferences.suggestion_mode.is_enabled()
+            && self.completion_ui.dismissed_suggestion_revision != Some(self.input.edit_revision())
+    }
+
+    fn has_forced_inline_suggestion(&self) -> bool {
+        self.input.cursor_at_end()
+            && self.ai_ui.forced_suggestion_revision == Some(self.input.edit_revision())
+            && self.ai_ui.suggestion_manager.active.is_some()
+    }
+
+    pub(crate) fn completion_suffix(&self) -> Option<&str> {
+        if !self.automatic_suggestion_allowed() {
+            return None;
+        }
+        self.input
+            .completion
+            .as_deref()?
+            .strip_prefix(self.input.as_str())
+            .filter(|suffix| !suffix.is_empty())
+    }
+
+    pub(crate) fn inline_suggestion_suffix(&self) -> Option<&str> {
+        self.completion_suffix().or_else(|| {
+            if self.automatic_suggestion_allowed() || self.has_forced_inline_suggestion() {
+                self.ai_ui.suggestion_manager.suffix(self.input.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
     pub(crate) fn accept_active_suggestion(&mut self) -> bool {
         self.accept_suggestion(SuggestionAcceptMode::Full)
     }
 
     pub(crate) fn accept_suggestion(&mut self, mode: SuggestionAcceptMode) -> bool {
-        if !self.input.cursor_at_end() {
+        self.sync_input_preferences();
+        let Some(suffix) = self.inline_suggestion_suffix() else {
             return false;
-        }
-        let suggestion = match self.ai_ui.suggestion_manager.active.clone() {
-            Some(state) => state,
-            None => return false,
         };
-
-        let current = self.input.as_str().to_string();
-        if !suggestion.full.starts_with(&current) || suggestion.full.len() <= current.len() {
-            return false;
-        }
-
-        let suffix = &suggestion.full[current.len()..];
-        if suffix.is_empty() {
-            return false;
-        }
 
         let insert_chunk = match mode {
             SuggestionAcceptMode::Full => suffix.to_string(),
@@ -470,10 +490,13 @@ impl<'a> Repl<'a> {
             },
         };
 
-        let inserted_all = insert_chunk.len() == suffix.len();
+        let partial_forced =
+            self.has_forced_inline_suggestion() && insert_chunk.len() < suffix.len();
         self.input.insert_str(&insert_chunk);
-
-        if matches!(mode, SuggestionAcceptMode::Full) && inserted_all {
+        self.input.completion = None;
+        if partial_forced {
+            self.ai_ui.forced_suggestion_revision = Some(self.input.edit_revision());
+        } else {
             self.ai_ui.suggestion_manager.clear();
         }
 

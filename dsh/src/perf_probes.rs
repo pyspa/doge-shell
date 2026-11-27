@@ -435,7 +435,6 @@ async fn probe_repl_print_input_with_suggestion(iterations: usize) -> ProbeResul
 
     let elapsed = measure(iterations, || {
         repl.ai_ui.last_analyzed_input.clear();
-        repl.ai_ui.last_analysis_result = None;
         let mut out = Vec::with_capacity(512);
         repl.print_input(&mut out, false, true);
         black_box(out.len());
@@ -462,7 +461,6 @@ async fn probe_repl_print_input_reanalyze(iterations: usize) -> ProbeResult {
 
     let elapsed = measure(iterations, || {
         repl.ai_ui.last_analyzed_input.clear();
-        repl.ai_ui.last_analysis_result = None;
         let mut out = Vec::with_capacity(512);
         repl.print_input(&mut out, false, false);
         black_box(out.len());
@@ -514,10 +512,9 @@ async fn probe_repl_analyze_input_case(
     repl.input.reset(input.to_string());
 
     let elapsed = measure(iterations, || {
-        let analysis = repl.analyze_input(black_box(input), None);
+        let analysis = repl.analyze_input(black_box(input));
         black_box((
             analysis.can_execute,
-            analysis.completion.as_ref().map(String::len),
             analysis.color_ranges.as_ref().map(Vec::len),
         ));
     });

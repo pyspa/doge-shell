@@ -131,30 +131,10 @@ async fn test_analyze_input_suffix_calculation() {
     let input_str = format!("ls {}", partial);
     repl.input.reset(input_str.clone());
 
-    // analyze_input usage: input, completion (start with None)
-    let analysis = repl.analyze_input(&input_str, None);
-    let full = analysis.completion_full;
-    let comp_suffix = analysis.completion;
-
-    // Expectation: completion found (hits valid path logic)
-    // Note: completion::path_completion_prefix depends on CWD.
-    // Cargo.toml should be in CWD when running tests for dsh package.
-
-    if let Some(s) = comp_suffix {
-        assert_eq!(
-            s, suffix,
-            "Suffix should be 'l' for Cargo.tom -> Cargo.toml"
-        );
-        // Full string should be "ls Cargo.toml"
-        if let Some(f) = full {
-            assert_eq!(f, format!("ls {}", test_file));
-        } else {
-            panic!("Should have returned full completion string");
-        }
-    } else {
-        // If it returns None, it might mean CWD is not as expected or file not found.
-        // We'll skip asserting if environment doesn't match, but ideally it should pass in this repo.
-        // println!("Skipping test as Cargo.toml was not found or completion failed");
+    repl.print_input(&mut Vec::new(), false, true);
+    if let Some(full) = repl.input.completion.as_deref() {
+        assert_eq!(full.strip_prefix(&input_str), Some(suffix));
+        assert_eq!(full, format!("ls {test_file}"));
     }
 
     // Tab can replace the word under the cursor. Inline suffixes are only
@@ -162,10 +142,9 @@ async fn test_analyze_input_suffix_calculation() {
     let input_mid = "ls Cargo.tom -lat";
     repl.input.reset(input_mid.to_string());
     repl.input.move_to("ls Cargo.tom".len());
-    let analysis_mid = repl.analyze_input(input_mid, None);
-    assert!(analysis_mid.completion_full.is_none());
-    assert!(analysis_mid.completion.is_none());
-    assert!(analysis_mid.color_ranges.is_some());
+    repl.print_input(&mut Vec::new(), false, true);
+    assert!(repl.inline_suggestion_suffix().is_none());
+    assert!(repl.input.color_ranges.is_some());
 }
 
 #[tokio::test]

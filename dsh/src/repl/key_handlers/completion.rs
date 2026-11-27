@@ -40,7 +40,7 @@ pub(crate) fn handle_accept_suggestion_full(repl: &mut Repl<'_>) -> bool {
     {
         if let Some(fix) = repl.ai_ui.auto_fix_suggestion.take() {
             repl.input.reset(fix.replacement);
-            repl.refresh_inline_suggestion(); // clear potential other suggestions
+            repl.ai_ui.suggestion_manager.clear();
             return true; // reset_completion = true
         }
     } else if repl.accept_active_suggestion() {
@@ -66,25 +66,17 @@ pub(crate) fn handle_rotate_suggestion_backward(repl: &mut Repl<'_>) -> bool {
 
 pub(crate) fn handle_accept_completion(repl: &mut Repl<'_>) {
     repl.completion_ui.path_feedback.clear();
-    if let Some(comp) = repl.input.completion.take()
-        && repl.input.cursor_at_end()
-        && comp.starts_with(repl.input.as_str())
-        && comp.len() > repl.input.as_str().len()
-    {
-        repl.input.reset(comp);
-    }
+    repl.accept_active_suggestion();
     repl.completion_ui.completion.clear();
 }
 
 pub(crate) fn handle_cancel_completion(repl: &mut Repl<'_>) {
     repl.completion_ui.path_feedback.clear();
-    if repl.input.completion.is_some() || repl.ai_ui.suggestion_manager.active.is_some() {
-        repl.completion_ui.completion.clear();
-        repl.ai_ui.suggestion_manager.clear();
-        let mut renderer = TerminalRenderer::new();
-        repl.print_input(&mut renderer, true, true);
-        renderer.flush().ok();
-    }
+    repl.completion_ui.completion.clear();
+    repl.completion_ui.dismissed_suggestion_revision = Some(repl.input.edit_revision());
+    repl.input.completion = None;
+    repl.ai_ui.suggestion_manager.clear();
+    repl.ai_ui.forced_suggestion_revision = None;
 }
 
 // A cancelled wait is a handled Tab action: retain the query and do not open
@@ -138,6 +130,7 @@ pub(crate) async fn handle_trigger_completion(
                 return Ok((prefix_bytes == 0).then_some(ReplControlFlow::Continue));
             };
             let source = source.into_owned();
+            repl.completion_ui.dismissed_suggestion_revision = None;
             return complete_shell_input(repl, &source, prefix_bytes, cursor, lexical_range)
                 .await
                 .map(Some);
@@ -365,7 +358,12 @@ async fn complete_shell_input(
 
     if !completion_handled {
         // Preserve the existing explicit-Tab suggestion acceptance fallback.
-        if repl.accept_suggestion(SuggestionAcceptMode::Word) {
+        if !repl
+            .completion_ui
+            .integrated_completion
+            .requires_directory(source, cursor)
+            && repl.accept_suggestion(SuggestionAcceptMode::Word)
+        {
             debug!("No standard completion, accepted suggestion word fallback");
             completion_handled = true;
         } else {

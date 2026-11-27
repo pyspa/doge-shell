@@ -634,7 +634,7 @@ fn test_down_is_history_next_outside_completion_mode() {
 
 #[test]
 fn test_backtab_triggers_completion() {
-    let k = key(KeyCode::BackTab, NONE);
+    let k = key(KeyCode::BackTab, KeyModifiers::SHIFT);
     assert_eq!(
         determine_key_action(&k, &ctx_default()),
         KeyAction::TriggerCompletion

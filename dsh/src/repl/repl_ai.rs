@@ -144,84 +144,95 @@ impl<'a> Repl<'a> {
         self.send_diagnose_hint(command_time);
     }
 
-    pub(crate) fn refresh_inline_suggestion(&mut self) -> bool {
-        if !self.input.cursor_at_end() || self.input.completion.is_some() {
-            let had_suggestion = !self.ai_ui.suggestion_manager.candidates.is_empty();
-            self.ai_ui.suggestion_manager.clear();
-            return had_suggestion;
-        }
+    pub(crate) fn inline_ai_pending(&self) -> bool {
+        self.automatic_suggestion_allowed() && self.ai_ui.suggestion_manager.engine.ai_pending()
+    }
 
+    pub(crate) fn refresh_inline_suggestion(&mut self, allow_ai: bool) -> bool {
         self.sync_input_preferences();
-        let history_ref = self.shell.cmd_history.as_ref();
-        let current_input = self.input.to_string();
-        let cursor_pos = self.input.cursor();
-
-        // History stays first. Integrated JSON/dynamic ghost text should beat
-        // generic path lookahead, and AI remains the final fallback.
-        let mut candidates = self.ai_ui.suggestion_manager.engine.predict_history(
-            current_input.as_str(),
-            cursor_pos,
-            history_ref,
-        );
-
-        if candidates.is_empty() {
-            let logical_input = self.state.logical_input(&current_input);
-            let completion_input = crate::parser::check::join_continued_lines(&logical_input);
-            let needs_projection = logical_input.len() != current_input.len()
-                || completion_input.len() != logical_input.len();
-            let completion_cursor = if needs_projection {
-                completion_input.chars().count()
-            } else {
-                cursor_pos
-            };
-            // Only the final line is editable at a continuation prompt.
-            let editable_completion = |full: String| {
-                let suffix = full.strip_prefix(completion_input.as_ref())?;
-                if suffix.is_empty() {
-                    return None;
-                }
-                Some(if needs_projection {
-                    format!("{current_input}{suffix}")
-                } else {
-                    full
-                })
-            };
-            let current_dir = self.terminal_ui.prompt.read().current_path().to_path_buf();
-            self.sync_completion_jobs();
-            if let Some(full) = self.completion_ui.integrated_completion.ghost_completion(
-                &completion_input,
-                completion_cursor,
-                &current_dir,
-                history_ref,
-            ) && let Some(full) = editable_completion(full)
-            {
-                candidates.push(crate::suggestion::SuggestionState {
-                    full,
-                    source: crate::suggestion::SuggestionSource::Completion,
-                });
-            } else if let Some(filesystem) = self
-                .completion_ui
-                .integrated_completion
-                .filesystem_context_for_input(&completion_input, completion_cursor, &current_dir)
-                && let Some(extra) = super::completion::completion_suggestion(
-                    &self.input,
-                    &completion_input,
-                    &self.shell.environment,
-                    &filesystem,
-                )
-                && let Some(full) = editable_completion(extra.full)
-            {
-                candidates.push(crate::suggestion::SuggestionState { full, ..extra });
-            }
+        if self.has_forced_inline_suggestion() {
+            return false;
+        }
+        if !self.automatic_suggestion_allowed() {
+            let changed = self.input.completion.take().is_some()
+                || self.ai_ui.suggestion_manager.active.is_some();
+            self.ai_ui.suggestion_manager.clear();
+            return changed;
         }
 
+        let current_input = self.input.as_str();
+        let logical_input = self.state.logical_input(current_input);
+        let completion_input = crate::parser::check::join_continued_lines(&logical_input);
+        let cursor_pos = self.input.cursor();
+        let completion_cursor = completion_input.chars().count();
+        let history = self
+            .ai_ui
+            .suggestion_manager
+            .engine
+            .predict_history(current_input, cursor_pos, self.shell.cmd_history.as_ref())
+            .into_iter()
+            .next();
+        let next = if current_input.is_empty() {
+            None
+        } else if let Some(state) = history {
+            Some(state.full)
+        } else {
+            let current_dir = self.terminal_ui.prompt.read().current_path().to_path_buf();
+            let engine = &self.completion_ui.integrated_completion;
+            self.sync_completion_jobs();
+            engine
+                .ghost_completion(
+                    &completion_input,
+                    completion_cursor,
+                    &current_dir,
+                    self.shell.cmd_history.as_ref(),
+                )
+                .or_else(|| {
+                    let (filesystem, only_dirs) = engine.filesystem_context_for_input(
+                        &completion_input,
+                        completion_cursor,
+                        &current_dir,
+                    )?;
+                    super::completion::completion_suggestion(
+                        &self.input,
+                        &completion_input,
+                        &self.shell.environment,
+                        &filesystem,
+                        only_dirs,
+                    )
+                    .map(|suggestion| suggestion.full)
+                })
+                .and_then(|full| {
+                    let suffix = full.strip_prefix(completion_input.as_ref())?;
+                    if suffix.is_empty() {
+                        return None;
+                    }
+                    Some(if completion_input == current_input {
+                        full
+                    } else {
+                        format!("{current_input}{suffix}")
+                    })
+                })
+        };
+        let changed = self.input.completion != next;
+        self.input.completion = next;
+        if self.input.completion.is_some() {
+            self.ai_ui.suggestion_manager.clear();
+            return changed;
+        }
+        if !allow_ai {
+            return changed;
+        }
+
+        let mut candidates = Vec::new();
+        let current_input = self.input.to_string();
+        let history_ref = self.shell.cmd_history.as_ref();
         // If no deterministic candidates are available, try AI with full context.
         //
         // Debounced: this runs on every keystroke, and the refresh tick calls it
         // again once typing stops, so waiting for a quiet moment costs no
         // suggestions but stops a request per character.
-        if candidates.is_empty()
-            && self.ai_ui.input_preferences.ai_backfill
+        if self.ai_ui.input_preferences.ai_backfill
             && !self.shell.environment.read().path_ghost_pending()
             && self.ai_ui.last_input_change_time.elapsed() >= AI_BACKFILL_DEBOUNCE
         {
@@ -251,8 +262,7 @@ impl<'a> Repl<'a> {
             }
         }
 
-        self.ai_ui.suggestion_manager.update_candidates(candidates);
-        self.ai_ui.suggestion_manager.active.is_some()
+        self.ai_ui.suggestion_manager.update_candidates(candidates) || changed
     }
 
     pub(crate) async fn force_ai_suggestion(&mut self) -> bool {
@@ -333,6 +343,8 @@ impl<'a> Repl<'a> {
         match outcome {
             Some(Some(state)) => {
                 tracing::debug!("force_ai_suggestion: got state {:?}", state);
+                self.input.completion = None;
+                self.ai_ui.forced_suggestion_revision = Some(self.input.edit_revision());
                 self.ai_ui.suggestion_manager.update_candidates(vec![state]);
                 return true;
             }

@@ -169,14 +169,13 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // Accept suggestion (Ctrl+Right, Alt+f by word)
         (KeyCode::Right, m)
             if m.contains(CTRL)
-                && ctx.has_suggestion
-                && !ctx.has_completion
+                && (ctx.has_suggestion || ctx.has_completion)
                 && ctx.cursor_at_end =>
         {
             KeyAction::AcceptSuggestionWord
         }
         (KeyCode::Char('f'), ALT)
-            if ctx.has_suggestion && !ctx.has_completion && ctx.cursor_at_end =>
+            if (ctx.has_suggestion || ctx.has_completion) && ctx.cursor_at_end =>
         {
             KeyAction::AcceptSuggestionWord
         }
@@ -210,7 +209,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
 
         // Ctrl+f to accept suggestion
         (KeyCode::Char('f'), CTRL)
-            if ctx.has_suggestion && !ctx.has_completion && ctx.cursor_at_end =>
+            if (ctx.has_suggestion || ctx.has_completion) && ctx.cursor_at_end =>
         {
             KeyAction::AcceptSuggestionFull
         }
@@ -283,7 +282,10 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         (KeyCode::Char('p'), ALT) => KeyAction::PrevPlaceholder,
 
         // Tab: Completion
-        (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => KeyAction::TriggerCompletion,
+        (KeyCode::Tab, NONE) => KeyAction::TriggerCompletion,
+        (KeyCode::BackTab, mods) if super::keybind::chord::back_tab_modifiers(mods) == NONE => {
+            KeyAction::TriggerCompletion
+        }
 
         // Enter: Execute
         (KeyCode::Enter, NONE) => KeyAction::Execute,

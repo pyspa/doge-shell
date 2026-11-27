@@ -20,6 +20,7 @@ fn file_context(input: &str, environment: &Arc<RwLock<Environment>>) -> FileSyst
             &std::env::current_dir().unwrap(),
         )
         .unwrap()
+        .0
 }
 
 #[test]
@@ -34,6 +35,7 @@ fn git_path_ghost_uses_the_same_directory_as_tab() {
         &input,
         &environment,
         &file_context(&input, &environment),
+        false,
     );
     assert_eq!(suggestion.map(|s| s.full), Some(format!("{input}target")));
 }
@@ -53,6 +55,7 @@ fn path_ghost_completes_the_last_word_after_a_multibyte_word() {
         &input,
         &environment,
         &file_context(&input, &environment),
+        false,
     );
     assert_eq!(suggestion.map(|s| s.full), Some(format!("{input}target")));
 }
@@ -75,6 +78,7 @@ fn path_suggestion_follows_logical_home_changes() {
             input,
             &environment,
             &file_context(input, &environment),
+            false,
         );
         assert_eq!(
             suggestion.map(|s| s.full),
@@ -180,7 +184,7 @@ fn test_argument_path_completion_preserves_escaped_style() {
     .unwrap();
 
     assert_eq!(completion.full, expected);
-    assert_eq!(completion.suffix, "o.txt");
+    assert_eq!(completion.full.strip_prefix(&input), Some("o.txt"));
 }
 
 #[test]
@@ -203,7 +207,7 @@ fn test_argument_path_completion_replaces_quoted_raw_token() {
     .unwrap();
 
     assert_eq!(completion.full, expected);
-    assert_eq!(completion.suffix, "o.txt");
+    assert_eq!(completion.full.strip_prefix(&input), Some("o.txt"));
 }
 
 #[test]
@@ -228,7 +232,7 @@ fn test_argument_path_completion_directory_only() {
     .unwrap();
 
     assert_eq!(completion.full, expected);
-    assert_eq!(completion.suffix, "odir/");
+    assert_eq!(completion.full.strip_prefix(&input), Some("odir/"));
 }
 
 #[test]
@@ -248,6 +252,7 @@ fn test_command_path_completion_preserves_escaped_style() {
         &input,
         &environment,
         &file_context(&input, &environment),
+        false,
     )
     .unwrap();
 
@@ -275,7 +280,7 @@ fn test_command_path_completion_replaces_quoted_raw_token() {
     .unwrap();
 
     assert_eq!(completion.full, expected);
-    assert_eq!(completion.suffix, "odir/");
+    assert_eq!(completion.full.strip_prefix(&input), Some("odir/"));
 }
 
 #[test]
@@ -294,7 +299,8 @@ fn test_command_path_completion_keeps_directory_only_policy() {
             &input_state,
             &input,
             &environment,
-            &file_context(&input, &environment)
+            &file_context(&input, &environment),
+            false,
         ),
         None
     );
@@ -314,6 +320,7 @@ fn test_command_prefix_completion_still_uses_environment_first() {
         input,
         &environment,
         &file_context(input, &environment),
+        false,
     )
     .unwrap();
 
@@ -349,6 +356,7 @@ fn fallback_completion_extends_only_a_literal_command_at_line_end() {
             input,
             &environment,
             &file_context(input, &environment),
+            false,
         );
         assert_eq!(
             suggestion.as_ref().map(|s| s.full.as_str()),

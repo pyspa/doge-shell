@@ -200,7 +200,7 @@ impl<'a> Repl<'a> {
                 path_feedback: Default::default(),
                 completion: Completion::new(),
                 integrated_completion,
-                cache: HistoryCache::new(Duration::from_millis(300)),
+                dismissed_suggestion_revision: None,
             },
             ai_ui: AiUiState {
                 suggestion_manager,
@@ -214,7 +214,7 @@ impl<'a> Repl<'a> {
                 ai_tx,
                 explanation_dirty: false,
                 last_analyzed_input: String::new(),
-                last_analysis_result: None,
+                forced_suggestion_revision: None,
             },
             background_tasks: BackgroundTasks {
                 last_git_update: None,

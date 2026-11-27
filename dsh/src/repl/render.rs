@@ -1,5 +1,4 @@
 use super::Repl;
-use super::input_analysis::{CachedInputAnalysis, InputAnalysis};
 use crate::input::{ColorType, display_width};
 use crate::parser::{self, HighlightKind, Rule};
 use anyhow::Result;
@@ -315,44 +314,25 @@ pub fn print_input(
         (!ranges.is_empty()).then_some(ranges)
     });
 
-    let mut completion: Option<String> = None;
-    if is_empty || reset_completion {
+    if refresh_suggestion || !reset_completion {
+        repl.refresh_inline_suggestion(refresh_suggestion);
+    } else {
         repl.input.completion = None;
+    }
+
+    if is_empty {
         repl.input.color_ranges = None;
         repl.input.can_execute = false;
         repl.ai_ui.last_analyzed_input.clear();
-        repl.ai_ui.last_analysis_result = None;
-    } else {
-        // Safe to use &mut repl now because input_string is owned
-        if repl.input.cursor_at_end() {
-            completion = repl.get_completion_from_history(&input_string);
-        }
-
-        if repl.ai_ui.last_analyzed_input == input_string
-            && let Some(analysis) = repl.ai_ui.last_analysis_result.as_ref()
-            && analysis.cursor_at_end == repl.input.cursor_at_end()
-        {
-            let completion_full = analysis.completion_full.clone();
-            let analysis_completion = analysis.completion.clone();
-            apply_cached_analysis(repl, &mut completion, completion_full, analysis_completion);
-        } else {
-            let analysis = repl.analyze_input(&input_string, completion.clone());
-            apply_fresh_analysis(repl, &mut completion, analysis);
-            repl.ai_ui.last_analyzed_input.clear();
-            repl.ai_ui.last_analyzed_input.push_str(&input_string);
-        }
+    } else if reset_completion || repl.ai_ui.last_analyzed_input != input_string {
+        let analysis = repl.analyze_input(&input_string);
+        repl.input.color_ranges = analysis.color_ranges;
+        repl.input.can_execute = analysis.can_execute;
+        repl.ai_ui.last_analyzed_input.clone_from(&input_string);
     }
 
     if let Some(ranges) = history_match_ranges {
         merge_history_match_ranges(&mut repl.input.color_ranges, ranges);
-    }
-
-    if completion.is_none() && repl.input.cursor_at_end() {
-        if refresh_suggestion {
-            repl.refresh_inline_suggestion();
-        }
-    } else {
-        repl.ai_ui.suggestion_manager.clear();
     }
 
     // Auto-fix ghost text: the replacement (if any) plus a right-aligned
@@ -369,13 +349,7 @@ pub fn print_input(
         None
     };
 
-    let ghost_suffix = if completion.is_none() {
-        repl.ai_ui.suggestion_manager.suffix(&input_string)
-    } else {
-        None
-    };
-
-    let ai_pending_now = repl.ai_ui.suggestion_manager.engine.ai_pending();
+    let ai_pending_now = repl.inline_ai_pending();
 
     // Clear the current line and redraw prompt mark + input
     if repl.terminal_ui.last_drawn_cursor_y > 0 {
@@ -404,14 +378,14 @@ pub fn print_input(
         .and_then(|(fix, _)| fix.as_deref())
         .map(|text| (text, Color::DarkGrey))
         .or_else(|| {
-            completion
-                .as_deref()
-                .map(|text| (text, repl.input.completion_color()))
-        })
-        .or_else(|| {
-            ghost_suffix
-                .as_deref()
-                .map(|text| (text, repl.input.ghost_color()))
+            repl.inline_suggestion_suffix().map(|suffix| {
+                let color = if repl.completion_suffix().is_some() {
+                    repl.input.completion_color()
+                } else {
+                    repl.input.ghost_color()
+                };
+                (suffix, color)
+            })
         });
     repl.input.print_with_suffix(out, inline);
     let suffix = inline.map_or("", |(text, _)| text);
@@ -429,14 +403,14 @@ pub fn print_input(
         crate::input::editor::visual_position(suffix, columns, end_column);
     let mut drawn_row = end_row + suffix_rows;
     let pending = if ai_pending_now { " ⧗" } else { "" };
-    let hint_extra_width = || display_width(suffix) + display_width(pending);
+    let hint_extra_width = display_width(suffix) + display_width(pending);
     if ai_pending_now {
         queue!(out, Print(pending)).ok();
         drawn_row += crate::input::editor::visual_position(pending, columns, suffix_column).1;
     }
 
     if let Some((_, annotation)) = auto_fix.as_ref() {
-        render_hint_if_room(repl, out, annotation, hint_extra_width());
+        render_hint_if_room(repl, out, annotation, hint_extra_width);
     }
 
     let path_hint = if repl.completion_ui.path_feedback.is_active() {
@@ -454,66 +428,20 @@ pub fn print_input(
         None
     };
     if let Some(hint) = input_hint(repl, repl.input.cursor()) {
-        render_hint_if_room(repl, out, hint.text(), hint_extra_width());
+        render_hint_if_room(repl, out, hint.text(), hint_extra_width);
     } else if auto_fix.is_none()
         && !ai_pending_now
         && let Some(hint) = path_hint
         && !input_string.contains('\n')
         && suffix_rows == 0
     {
-        render_hint_if_room(repl, out, hint, hint_extra_width());
+        render_hint_if_room(repl, out, hint, hint_extra_width);
     }
 
     repl.ai_ui.ai_pending_shown = ai_pending_now;
 
     restore_cursor_position(out, cursor_pos, columns, drawn_row);
     queue!(out, cursor::Show).ok();
-}
-
-fn apply_cached_analysis(
-    repl: &mut Repl<'_>,
-    completion: &mut Option<String>,
-    completion_full: Option<String>,
-    analysis_completion: Option<String>,
-) {
-    if let Some(suffix) = analysis_completion {
-        *completion = Some(suffix);
-    }
-    // Derive acceptance from the suffix that will actually be displayed,
-    // including cached history when the current history query could not lock.
-    repl.input.completion = completion_full.or_else(|| {
-        completion
-            .as_ref()
-            .map(|suffix| format!("{}{suffix}", repl.input.as_str()))
-    });
-}
-
-fn apply_fresh_analysis(
-    repl: &mut Repl<'_>,
-    completion: &mut Option<String>,
-    analysis: InputAnalysis,
-) {
-    let InputAnalysis {
-        completion_full,
-        completion: analysis_completion,
-        color_ranges,
-        can_execute,
-    } = analysis;
-
-    apply_cached_analysis(
-        repl,
-        completion,
-        completion_full.clone(),
-        analysis_completion.clone(),
-    );
-
-    repl.input.color_ranges = color_ranges;
-    repl.input.can_execute = can_execute;
-    repl.ai_ui.last_analysis_result = Some(CachedInputAnalysis {
-        cursor_at_end: repl.input.cursor_at_end(),
-        completion_full,
-        completion: analysis_completion,
-    });
 }
 
 fn merge_history_match_ranges(

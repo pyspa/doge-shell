@@ -55,6 +55,9 @@ impl KeyStroke {
     ///   the literal key instead. They are folded together — the same reasoning
     ///   the built-in undo binding already applies.
     fn normalized(mut self) -> Self {
+        if self.code == KeyCode::BackTab {
+            self.mods = back_tab_modifiers(self.mods);
+        }
         if let KeyCode::Char(ch) = self.code {
             self.mods.remove(KeyModifiers::SHIFT);
             if self.mods.contains(KeyModifiers::CONTROL) {
@@ -69,6 +72,11 @@ impl KeyStroke {
         }
         self
     }
+}
+
+pub(crate) fn back_tab_modifiers(mut mods: KeyModifiers) -> KeyModifiers {
+    mods.remove(KeyModifiers::SHIFT);
+    mods
 }
 
 impl fmt::Display for KeyStroke {
@@ -257,6 +265,14 @@ mod tests {
         assert_eq!(stroke("shift-tab").code, KeyCode::BackTab);
         assert_eq!(stroke("shift-tab").mods, KeyModifiers::NONE);
         assert_eq!(stroke("backtab"), stroke("shift-tab"));
+        assert_eq!(
+            KeyStroke::from_event(&KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+            stroke("shift-tab")
+        );
+        assert_ne!(
+            KeyStroke::new(KeyCode::BackTab, KeyModifiers::SHIFT | KeyModifiers::ALT),
+            stroke("shift-tab")
+        );
     }
 
     #[test]

@@ -46,27 +46,8 @@ impl<'a> Repl<'a> {
         }
     }
 
-    pub(super) fn get_completion_from_history(&self, input: &str) -> Option<String> {
-        let now = Instant::now();
-        // Try cached match-sorted list first if still fresh and prefix unchanged
-        if let Some(last_time) = self.completion_ui.cache.time
-            && now.duration_since(last_time) <= self.completion_ui.cache.ttl
-            && self.completion_ui.cache.prefix.starts_with(input)
-            && let Some(ref list) = self.completion_ui.cache.match_sorted
-            && let Some(top) = list
-                .iter()
-                .find(|it| it.item.len() > input.len() && it.item.starts_with(input))
-        {
-            return Some(top.item[input.len()..].to_string());
-        }
-
-        let history = self.shell.cmd_history.as_ref()?.try_lock()?;
-        let entry = history.first_extension(input)?;
-        Some(entry[input.len()..].to_string())
-    }
-
-    pub(crate) fn analyze_input(&self, input: &str, completion: Option<String>) -> InputAnalysis {
-        input_analysis::analyze_input(self, input, completion)
+    pub(crate) fn analyze_input(&self, input: &str) -> InputAnalysis {
+        input_analysis::analyze_input(self, input)
     }
 
     /// Largest history snapshot handed to the interactive picker.

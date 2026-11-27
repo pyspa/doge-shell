@@ -260,7 +260,7 @@ fn alias_fixed_quoted_git_directory_reaches_filesystem_context() {
     std::fs::create_dir(dir.path().join("repo space")).unwrap();
     alias(&engine, "ag", "git -C 'repo space' commit");
     for input in ["ag --ame", "sudo ag --ame"] {
-        let context = engine
+        let (context, _) = engine
             .filesystem_context_for_input(input, input.len(), dir.path())
             .unwrap();
         assert_eq!(
@@ -269,7 +269,7 @@ fn alias_fixed_quoted_git_directory_reaches_filesystem_context() {
         );
     }
     let input = "ag > ";
-    let context = engine
+    let (context, _) = engine
         .filesystem_context_for_input(input, input.len(), dir.path())
         .unwrap();
     assert_eq!(context.lookup_directory("", false), dir.path());

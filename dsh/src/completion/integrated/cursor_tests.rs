@@ -697,3 +697,42 @@ fn reference_completion_ghost_extends_the_active_name() {
         );
     }
 }
+
+#[tokio::test]
+async fn ghost_subcommand_matching_does_not_execute_argument_scripts() {
+    let engine = cursor_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("called");
+    let script = format!(
+        "touch {}; printf 'status-from-script\\n'",
+        crate::completion::subprocess::shell_quote(marker.to_str().unwrap())
+    );
+    let definition = serde_json::from_value(serde_json::json!({
+        "command": "audit-ghost",
+        "subcommands": [{ "name": "status" }],
+        "arguments": [
+            { "name": "first", "type": { "type": "Script", "data": script } },
+            { "name": "second", "type": { "type": "Script", "data": script } }
+        ]
+    }))
+    .unwrap();
+    engine.command_completion.lock().add_command(definition);
+    let input = "audit-ghost sta";
+    assert_eq!(
+        engine.ghost_completion(input, input.len(), dir.path(), None),
+        Some("audit-ghost status".into())
+    );
+    assert!(!marker.exists());
+
+    let tab = engine
+        .complete(input, input.len(), dir.path(), 20, None)
+        .await;
+    assert!(
+        tab.candidates
+            .iter()
+            .any(|c| c.text == "status-from-script"),
+        "{:?}",
+        tab.candidates
+    );
+    assert!(marker.exists());
+}

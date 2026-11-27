@@ -21,13 +21,15 @@ pub(super) fn completion_suggestion(
     input: &str,
     environment: &Arc<RwLock<Environment>>,
     filesystem: &FileSystemContext,
+    only_dirs: bool,
 ) -> Option<SuggestionState> {
     if input.is_empty() || input_state.cursor() != input_state.len() {
         return None;
     }
 
     if let Ok(pairs) = ShellParser::parse(Rule::commands, input)
-        && let Some(completion) = word_based_completion(environment, input, pairs, Some(filesystem))
+        && let Some(completion) =
+            word_based_completion(environment, input, pairs, filesystem, only_dirs)
     {
         return Some(SuggestionState {
             full: completion.full,
@@ -35,6 +37,9 @@ pub(super) fn completion_suggestion(
         });
     }
 
+    if only_dirs {
+        return None;
+    }
     mcp_form_completion(input).map(|full| SuggestionState {
         full,
         source: SuggestionSource::Completion,
@@ -45,7 +50,8 @@ pub(super) fn word_based_completion(
     environment: &Arc<RwLock<Environment>>,
     input: &str,
     pairs: Pairs<'_, Rule>,
-    filesystem: Option<&FileSystemContext>,
+    filesystem: &FileSystemContext,
+    only_dirs: bool,
 ) -> Option<WordCompletion> {
     if let Some(word) = pairs
         .clone()
@@ -67,11 +73,9 @@ pub(super) fn word_based_completion(
             let suffix = escape_unquoted(remaining);
             return Some(WordCompletion {
                 full: format!("{input}{suffix}"),
-                suffix,
             });
         }
     }
-    let filesystem = filesystem?;
     parser::get_words_from_pairs(pairs, input.len())
         .into_iter()
         .filter(|(_, span, current)| *current && !span.as_str().is_empty())
@@ -80,7 +84,7 @@ pub(super) fn word_based_completion(
                 input,
                 span.start(),
                 span.end(),
-                rule == Rule::argv0,
+                only_dirs || rule == Rule::argv0,
                 filesystem,
             ),
             _ => None,
@@ -142,7 +146,6 @@ fn complete_argument_word_in_context(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct WordCompletion {
     pub(super) full: String,
-    pub(super) suffix: String,
 }
 
 pub(super) fn complete_path_for_span(
@@ -163,7 +166,6 @@ pub(super) fn complete_path_for_span(
 
     Some(WordCompletion {
         full: replace_range(input, token.byte_start, token.byte_end, &candidate),
-        suffix: suffix.to_string(),
     })
 }
 

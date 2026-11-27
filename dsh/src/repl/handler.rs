@@ -212,17 +212,18 @@ async fn dispatch_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Result<ReplCo
     };
 
     // --- KeyAction-based dispatch for simple actions ---
+    repl.sync_input_preferences();
     let ctx = KeyContext {
         cursor_at_end: repl.input.cursor_at_end(),
         input_empty: repl.input.is_empty(),
-        has_suggestion: repl.ai_ui.suggestion_manager.active.is_some()
+        has_suggestion: repl.inline_suggestion_suffix().is_some()
             || (repl.input.is_empty()
                 && repl
                     .ai_ui
                     .auto_fix_suggestion
                     .as_ref()
                     .is_some_and(|fix| fix.has_fix())),
-        has_completion: repl.input.completion.is_some(),
+        has_completion: repl.completion_suffix().is_some(),
         completion_mode: repl.completion_ui.completion.completion_mode(),
         cursor_at_start: repl.input.cursor() == 0,
         next_char: repl.input.char_at(repl.input.cursor()),

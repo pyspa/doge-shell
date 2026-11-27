@@ -305,3 +305,43 @@ async fn tab_completes_a_literal_filename_when_the_user_name_does_not_match() {
     handle_trigger_completion(&mut repl).await.unwrap();
     assert_eq!(repl.input.as_str(), format!("cat \\{file}"));
 }
+
+#[tokio::test]
+async fn directory_arguments_do_not_fall_back_to_regular_files() {
+    use crate::{environment::Environment, repl::Repl, shell::Shell};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let fixture = tempfile::tempdir().unwrap();
+    let path = fixture.path().join("probe-file.txt");
+    std::fs::write(&path, "").unwrap();
+    let prefix = path.to_str().unwrap().trim_end_matches(".txt");
+    let mut shell = Shell::new(Environment::new_synthetic());
+    let mut repl = Repl::new(&mut shell);
+    repl.completion_ui
+        .integrated_completion
+        .initialize_command_completion()
+        .unwrap();
+    for (command, completes_file) in [("cat ", true), ("cd ", false), ("git -C ", false)] {
+        let input = format!("{command}{prefix}");
+        repl.input.reset(input.clone());
+        repl.print_input(&mut Vec::new(), false, true);
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        if !completes_file {
+            repl.handle_key_event(&right).await.unwrap();
+            assert_eq!(repl.input.as_str(), input);
+        }
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        repl.handle_key_event(&tab).await.unwrap();
+        let expected = if completes_file {
+            format!("{input}.txt")
+        } else {
+            input
+        };
+        assert_eq!(repl.input.as_str(), expected);
+    }
+
+    // Fixed Lisp form names are also ineligible at a directory position.
+    repl.input.reset("cd mcp-add-st".into());
+    repl.print_input(&mut Vec::new(), false, true);
+    assert!(repl.inline_suggestion_suffix().is_none());
+}

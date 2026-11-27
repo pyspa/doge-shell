@@ -265,6 +265,15 @@ pub(crate) async fn input_completion_at(
         }
     }
 
+    // The integrated engine already queried directories. A settled empty
+    // result here must not broaden to arbitrary files or executables.
+    if repl
+        .completion_ui
+        .integrated_completion
+        .requires_directory(source, cursor)
+    {
+        return CompletionSelection::None;
+    }
     let selection =
         completion_from_current_with_prompt(repl, query, prompt_text, input_text, framework).await;
     render_legacy_selection(selection, raw_token)

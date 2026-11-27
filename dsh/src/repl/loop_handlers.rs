@@ -96,12 +96,12 @@ impl<'a> Repl<'a> {
         let mut need_redraw = false;
         if self.ai_ui.input_preferences.ai_backfill
             && self.input.completion.is_none()
-            && self.refresh_inline_suggestion()
+            && self.refresh_inline_suggestion(true)
         {
             need_redraw = true;
         }
 
-        if self.ai_ui.suggestion_manager.engine.ai_pending() != self.ai_ui.ai_pending_shown {
+        if self.inline_ai_pending() != self.ai_ui.ai_pending_shown {
             need_redraw = true;
         }
 
@@ -271,7 +271,10 @@ impl<'a> Repl<'a> {
         let current_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
         if current_cwd != self.state.last_cwd {
             self.state.last_cwd = current_cwd;
-            if self.ai_ui.input_preferences.ai_backfill {
+            self.sync_input_preferences();
+            if self.ai_ui.input_preferences.ai_backfill
+                && self.ai_ui.input_preferences.suggestion_mode.is_enabled()
+            {
                 debug!(
                     "CWD changed to {:?}, triggering AI prefetch",
                     self.state.last_cwd
@@ -526,7 +529,6 @@ impl<'a> Repl<'a> {
         // A ready PATH (including empty) changes analysis even without a keystroke.
         // Recompute from current text/history; never accept a stale worker's input.
         self.ai_ui.last_analyzed_input.clear();
-        self.ai_ui.last_analysis_result = None;
         let mut renderer = TerminalRenderer::new();
         self.print_input(&mut renderer, false, true);
         renderer.flush().ok();

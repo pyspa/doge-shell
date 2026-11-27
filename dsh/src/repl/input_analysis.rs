@@ -7,80 +7,22 @@ use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
 use pest::Parser;
 
-/// Result of input analysis, containing syntax highlighting and completion info
-#[derive(Clone)]
+/// Syntax highlighting and execution status for the editable input.
 pub(crate) struct InputAnalysis {
-    pub(crate) completion_full: Option<String>,
-    pub(crate) completion: Option<String>,
     pub(crate) color_ranges: Option<Vec<(usize, usize, ColorType)>>,
     pub(crate) can_execute: bool,
 }
 
-/// Cached redraw only needs completion metadata; color ranges already live on
-/// `Input` until the input text changes.
-pub(crate) struct CachedInputAnalysis {
-    pub(crate) cursor_at_end: bool,
-    pub(crate) completion_full: Option<String>,
-    pub(crate) completion: Option<String>,
-}
-
-/// Analyze shell input for syntax highlighting and inline completion.
-///
-/// This function parses the input via the Pest grammar, determines completion
-/// candidates (command name or argument/path), and computes color ranges for
-/// syntax highlighting.
-pub(crate) fn analyze_input(
-    repl: &Repl<'_>,
-    input: &str,
-    mut completion: Option<String>,
-) -> InputAnalysis {
-    // Skip syntax highlighting for AI commands (starting with !)
+pub(crate) fn analyze_input(repl: &Repl<'_>, input: &str) -> InputAnalysis {
     if crate::ai_task_input::chat_prompt(input).is_some() {
         return InputAnalysis {
-            completion_full: None,
-            completion: None,
             color_ranges: None,
             can_execute: true,
         };
     }
 
-    let offer_completion = repl.input.cursor_at_end() && completion.is_none();
-    let complete_word = |source: &str, pairs: pest::iterators::Pairs<'_, Rule>, cursor| {
-        let current_dir = repl.terminal_ui.prompt.read().current_path().to_path_buf();
-        let filesystem = repl
-            .completion_ui
-            .integrated_completion
-            .filesystem_context_for_input(source, cursor, &current_dir);
-        super::completion::word_based_completion(
-            &repl.shell.environment,
-            source,
-            pairs,
-            filesystem.as_ref(),
-        )
-    };
-
     match ShellParser::parse(Rule::commands, input) {
         Ok(pairs) => {
-            let word_completion = if !offer_completion {
-                None
-            } else if repl.state.multiline_buffer.is_empty() && !input.contains("\\\n") {
-                complete_word(input, pairs.clone(), repl.input.cursor())
-            } else {
-                let logical_input = repl.state.logical_input(input);
-                let source = parser::check::join_continued_lines(&logical_input);
-                ShellParser::parse(Rule::commands, &source)
-                    .ok()
-                    .and_then(|pairs| complete_word(&source, pairs, source.chars().count()))
-                    .map(|mut word_completion| {
-                        word_completion.full = format!("{input}{}", word_completion.suffix);
-                        word_completion
-                    })
-            };
-            let completion_full = word_completion.map(|word_completion| {
-                completion = Some(word_completion.suffix);
-                word_completion.full
-            });
-
             let consumed = pairs.clone().next().map(|pair| pair.as_span().end());
             let (mut color_ranges, can_execute) =
                 repl.compute_color_ranges_from_pairs(pairs, input);
@@ -90,8 +32,6 @@ pub(crate) fn analyze_input(
             append_unparsed_tail_highlighting(input, consumed, &mut color_ranges);
 
             InputAnalysis {
-                completion_full,
-                completion,
                 color_ranges: Some(color_ranges),
                 can_execute,
             }
@@ -101,8 +41,6 @@ pub(crate) fn analyze_input(
             // empty plan, so there is nothing to mark as an error either.
             if input.trim().is_empty() {
                 return InputAnalysis {
-                    completion_full: None,
-                    completion: None,
                     color_ranges: Some(Vec::new()),
                     can_execute: false,
                 };
@@ -115,8 +53,6 @@ pub(crate) fn analyze_input(
                 ranges.push((token.start, token.end, ColorType::Error));
             }
             InputAnalysis {
-                completion_full: None,
-                completion: None,
                 color_ranges: Some(ranges),
                 can_execute: false,
             }
@@ -376,10 +312,8 @@ mod tests {
         let expected = format!("ls {}/dir\\ with\\ space/foo.txt", dir.path().display());
         repl.input.reset(input.clone());
 
-        let analysis = analyze_input(&repl, &input, None);
-
-        assert_eq!(analysis.completion_full.as_deref(), Some(expected.as_str()));
-        assert_eq!(analysis.completion.as_deref(), Some("o.txt"));
+        repl.print_input(&mut Vec::new(), false, true);
+        assert_eq!(repl.input.completion.as_deref(), Some(expected.as_str()));
     }
 
     #[tokio::test]
@@ -397,10 +331,8 @@ mod tests {
         let expected = format!("{}/dir\\ with\\ space/foodir/", dir.path().display());
         repl.input.reset(input.clone());
 
-        let analysis = analyze_input(&repl, &input, None);
-
-        assert_eq!(analysis.completion_full.as_deref(), Some(expected.as_str()));
-        assert_eq!(analysis.completion.as_deref(), Some("odir/"));
+        repl.print_input(&mut Vec::new(), false, true);
+        assert_eq!(repl.input.completion.as_deref(), Some(expected.as_str()));
     }
 
     #[tokio::test]
@@ -414,7 +346,7 @@ mod tests {
         let input = format!("ls {raw}");
         repl.input.reset(input.clone());
 
-        let analysis = analyze_input(&repl, &input, None);
+        let analysis = analyze_input(&repl, &input);
         let range = range_with_text(&analysis, &input, &raw).unwrap();
 
         assert!(matches!(range.2, ColorType::ValidPath));
@@ -431,7 +363,7 @@ mod tests {
         let input = format!("ls {raw}");
         repl.input.reset(input.clone());
 
-        let analysis = analyze_input(&repl, &input, None);
+        let analysis = analyze_input(&repl, &input);
         let range = range_with_text(&analysis, &input, &raw).unwrap();
 
         assert!(matches!(range.2, ColorType::ValidPath));
@@ -449,7 +381,7 @@ mod tests {
         repl.input.reset(input.clone());
 
         assert!(completion_lib::is_path_cached_for_shell_token(&raw));
-        let analysis = analyze_input(&repl, &input, None);
+        let analysis = analyze_input(&repl, &input);
         let range = range_with_text(&analysis, &input, &raw).unwrap();
 
         assert!(matches!(range.2, ColorType::ValidPath));
@@ -465,7 +397,7 @@ mod tests {
         let input = format!("ls {raw}");
         repl.input.reset(input.clone());
 
-        let analysis = analyze_input(&repl, &input, None);
+        let analysis = analyze_input(&repl, &input);
         let range = range_with_text(&analysis, &input, raw).unwrap();
 
         assert!(matches!(range.2, ColorType::Argument));

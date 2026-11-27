@@ -64,11 +64,11 @@ impl SuggestionManager {
         changed
     }
 
-    pub fn suffix(&self, input: &str) -> Option<String> {
+    pub fn suffix(&self, input: &str) -> Option<&str> {
         let suggestion = self.active.as_ref()?;
         if !suggestion.full.starts_with(input) || suggestion.full.len() <= input.len() {
             return None;
         }
-        Some(suggestion.full[input.len()..].to_string())
+        Some(&suggestion.full[input.len()..])
     }
 }

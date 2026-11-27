@@ -3437,3 +3437,40 @@ esac
         );
     }
 }
+
+#[tokio::test]
+async fn directory_slots_stop_before_untyped_external_fallback() {
+    let mut engine = IntegratedCompletionEngine::new(Environment::new_synthetic());
+    engine.initialize_command_completion().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    engine.environment.write().set_shell_var(
+        "DOGESH_EXTERNAL_COMPLETER".into(),
+        "printf 'zz-only-external\\n'".into(),
+    );
+    let generation = engine.dynamic.refresh_generation();
+    for input in ["cd zz-only", "git -C zz-only", "sudo git -C zz-only"] {
+        assert!(engine.requires_directory(input, input.len()), "{input}");
+        let result = engine
+            .complete(input, input.len(), dir.path(), 20, None)
+            .await;
+        assert_eq!(engine.dynamic.refresh_generation(), generation, "{input}");
+        assert_eq!(
+            result.disposition,
+            CompletionDisposition::Allowed,
+            "{input}"
+        );
+        assert!(
+            result.candidates.is_empty(),
+            "{input}: {:?}",
+            result.candidates
+        );
+    }
+    let input = "cat zz-only";
+    let result = wait_for_candidate(&engine, input, dir.path(), "zz-only-external").await;
+    assert!(
+        result
+            .candidates
+            .iter()
+            .any(|c| c.text == "zz-only-external")
+    );
+}

@@ -639,6 +639,15 @@ original input and cursor. Editing a recalled command starts a new draft.
 
 ### Completion Selection
 
+At the prompt, Tab and Shift-Tab start completion at the cursor. Directory-only
+arguments such as `cd` and `git -C` offer directories.
+
+While a suggestion is visible at the end of the line, Right or Ctrl+F accepts
+the whole suffix and Ctrl+Right accepts the next word. Esc dismisses the
+suggestion until the next edit or an explicit completion request.
+`(set-suggestion-mode 'off)` disables automatic suggestions. Tab and explicit
+AI actions are still available.
+
 In the inline completion chooser, Home/End select the first/last displayed
 candidate and PageUp/PageDown move by a screen-sized step. Shift-Tab moves
 backward. Esc or Ctrl-C closes the chooser without starting another completion

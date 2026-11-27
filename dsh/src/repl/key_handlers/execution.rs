@@ -253,8 +253,6 @@ async fn execute_shell_command(
         exit_code,
     ));
 
-    repl.completion_ui.cache.invalidate();
-
     let elapsed = start_time.elapsed();
     if is_command {
         if let Some(cmd_name) = command_timing::extract_command_name(&input_str) {
@@ -515,7 +513,6 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
             exit_code,
         ));
 
-        repl.completion_ui.cache.invalidate();
         repl.input.clear();
         repl.ai_ui.suggestion_manager.clear();
         let elapsed = start_time.elapsed();

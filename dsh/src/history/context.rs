@@ -46,6 +46,7 @@ mod tests {
         let nested = repo.join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         assert_eq!(
             get_current_context_from(&nested),
             Some(repo.to_string_lossy().into_owned())
@@ -57,7 +58,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        std::fs::write(repo.join(".git"), "gitdir: /elsewhere\n").unwrap();
+        std::fs::create_dir(repo.join("metadata")).unwrap();
+        std::fs::write(repo.join("metadata/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(repo.join(".git"), "gitdir: metadata\n").unwrap();
         assert_eq!(
             get_current_context_from(&repo),
             Some(repo.to_string_lossy().into_owned())
@@ -77,6 +80,7 @@ mod tests {
     fn ancestor_marker_wins_over_cwd() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join(".git")).unwrap();
+        std::fs::write(root.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         let child = root.path().join("unmarked/child");
         std::fs::create_dir_all(&child).unwrap();
         assert_eq!(

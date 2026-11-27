@@ -79,7 +79,7 @@ fn format_prompt_path(
         return (path_str, true);
     }
 
-    let is_git_root = current_dir.join(".git").exists();
+    let is_git_root = crate::git_context::git_dir_for_worktree(current_dir).is_some();
     if is_git_root {
         let path = current_dir
             .file_name()

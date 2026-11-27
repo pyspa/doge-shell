@@ -50,5 +50,5 @@ chrono.workspace = true
 tokio.workspace = true
 tokio-util = "0.7"
 httpdate = "1.0"
-notify = "8.2.0"
+notify = "9"
 ratatui.workspace = true

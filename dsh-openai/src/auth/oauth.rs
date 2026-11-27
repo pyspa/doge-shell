@@ -2,7 +2,6 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
-use rand::RngCore;
 use reqwest::Url;
 use sha2::{Digest, Sha256};
 
@@ -49,10 +48,11 @@ impl TokenReply {
         Ok(credentials)
     }
 }
-fn random() -> String {
+fn random() -> Result<String> {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
+    getrandom::fill(&mut bytes)
+        .map_err(|err| anyhow!("OS random number generation failed: {err}"))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 fn auth_url(url: &str) -> Result<Url> {
     let url = Url::parse(url).map_err(|_| anyhow!("Invalid OpenAI discovery endpoint."))?;
@@ -159,9 +159,9 @@ impl LoginAttempt {
             "http://127.0.0.1:{}/auth/callback",
             listener.local_addr()?.port()
         );
-        let state = random();
-        let nonce = random();
-        let verifier = random();
+        let state = random()?;
+        let nonce = random()?;
+        let verifier = random()?;
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let mut authorization_url = Url::parse(&format!("{AUTH_ISSUER}/api/accounts/authorize"))?;
         let client_id = selected

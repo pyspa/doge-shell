@@ -60,10 +60,19 @@ fn path_completion_event_reanalyzes_current_input_without_a_new_key() {
             );
             barrier.wait();
             worker.join().unwrap();
-            let event = tokio::time::timeout(Duration::from_secs(2), repl.event_loop.next_event())
-                .await
-                .unwrap();
-            assert!(matches!(event, event_loop::LoopEvent::CompletionRefresh));
+            // Git watches and timers may also be ready while PATH is scanned.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if matches!(
+                        repl.event_loop.next_event().await,
+                        event_loop::LoopEvent::CompletionRefresh
+                    ) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("PATH readiness must produce a completion refresh without a keypress");
             repl.handle_completion_refresh();
             assert_eq!(repl.input.completion.as_deref(), Some("ghost-complete"));
             assert_eq!(calls.load(Ordering::SeqCst), 0);

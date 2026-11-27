@@ -58,7 +58,7 @@
 - macOS の最低対応版は **13.0**。AI tool の descriptor-relative traversal は `O_SEARCH`（Linux は `O_PATH`）で search-only directory fd を開き、listing 用の readable fd と分離する。これにより execute-only parent を traversal できる。
 - `.cargo/config.toml` の `MACOSX_DEPLOYMENT_TARGET=13.0` が通常ビルドの既定値で、CI と stress workflow でも同じ値を指定する。明示上書きは 13.0 以上のみをサポートする。新しい macOS の CI 成功は macOS 13 実機での実行証明ではない。
 
-- MSRV 1.95 (`Cargo.toml` の `rust-version`)。`sysinfo 0.39.6` が 1.95 を要求するのが現在の床。旧根拠の `str::floor_char_boundary` (dsh-openai) は 1.91、`std::io::pipe` は 1.87。CI の `msrv (1.95)` job が `cargo check --workspace --all-targets` で実証する。
+- MSRV 1.95 (`Cargo.toml` の `rust-version`)。`sysinfo 0.40` が 1.95 を要求するのが現在の床。旧根拠の `str::floor_char_boundary` (dsh-openai) は 1.91、`std::io::pipe` は 1.87。CI の `msrv (1.95)` job が `cargo check --workspace --all-targets` で実証する。
 - mold は Linux のみ。`.cargo/config.toml` は `[target.'cfg(target_os = "linux")']` の下に書く。`[build] rustflags` に置くと macOS の clang が `-fuse-ld=mold` を `invalid linker name` で拒否して**全リンクが落ちる** (`f866418`)。`scripts/check-portability.py` がこれを見る。
 - mold が PATH に必要。CI の Linux ジョブは `apt-get install -y mold` を踏む。
 - `[profile.dev] strip = "none"` は macOS 用。`debug = 0` だと cargo が `strip = "debuginfo"` を既定にし、macOS では `rust-objcopy` (optional な `llvm-tools` component) を要求して毎ビルド警告が出る。

@@ -94,7 +94,7 @@ impl ResponsesTransport {
         configure: &dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
     ) -> Result<Self> {
         use sha2::{Digest, Sha256};
-        let fingerprint = format!("{:x}", Sha256::digest(key.as_bytes()))[..16].to_string();
+        let fingerprint = hex::encode(Sha256::digest(key.as_bytes()))[..16].to_string();
         Self::build(
             ResponsesAuth::ApiKey { key, fingerprint },
             model,

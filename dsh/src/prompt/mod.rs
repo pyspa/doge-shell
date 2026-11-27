@@ -7,7 +7,6 @@ use crossterm::style::Stylize;
 use dsh_builtin::project_context;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
-use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -184,7 +183,6 @@ pub struct Prompt {
     pub github_icon: String,
     current_git_root: Option<PathBuf>,
     pub needs_git_check: bool,
-    git_root_cache: HashSet<String>,
     git_status_cache: Option<GitStatusCache>,
     watcher: Option<RecommendedWatcher>,
     git_sender: Option<UnboundedSender<()>>,
@@ -246,7 +244,6 @@ impl Prompt {
             github_icon: "🐙".to_string(),
             current_git_root: None,
             needs_git_check: true,
-            git_root_cache: HashSet::new(),
             git_status_cache: None,
             watcher: None,
             git_sender: None,
@@ -302,6 +299,7 @@ impl Prompt {
 
     pub fn set_git_sender(&mut self, sender: UnboundedSender<()>) {
         self.git_sender = Some(sender);
+        self.start_watcher();
     }
 
     fn start_watcher(&mut self) {
@@ -318,42 +316,25 @@ impl Prompt {
                 })
                 .ok();
 
-            if let Some(w) = &mut watcher {
-                let git_dir = git_root.join(".git");
-                let git_dir = if git_dir.is_file() {
-                    if let Ok(content) = std::fs::read_to_string(&git_dir) {
-                        if let Some(path) = content.trim().strip_prefix("gitdir: ") {
-                            git_root.join(path.trim())
-                        } else {
-                            self.watcher = watcher;
-                            return;
-                        }
-                    } else {
-                        self.watcher = watcher;
-                        return;
-                    }
-                } else {
-                    git_dir
-                };
+            if let Some(w) = &mut watcher
+                && let Some(git_dir) = crate::git_context::git_dir_for_worktree(git_root)
+            {
+                let head = git_dir.join("HEAD");
+                let index = git_dir.join("index");
+                let refs = git_dir.join("refs");
+                let packed_refs = git_dir.join("packed-refs");
 
-                if git_dir.exists() {
-                    let head = git_dir.join("HEAD");
-                    let index = git_dir.join("index");
-                    let refs = git_dir.join("refs");
-                    let packed_refs = git_dir.join("packed-refs");
-
-                    if head.exists() {
-                        let _ = w.watch(&head, RecursiveMode::NonRecursive);
-                    }
-                    if index.exists() {
-                        let _ = w.watch(&index, RecursiveMode::NonRecursive);
-                    }
-                    if refs.exists() {
-                        let _ = w.watch(&refs, RecursiveMode::Recursive);
-                    }
-                    if packed_refs.exists() {
-                        let _ = w.watch(&packed_refs, RecursiveMode::NonRecursive);
-                    }
+                if head.exists() {
+                    let _ = w.watch(&head, RecursiveMode::NonRecursive);
+                }
+                if index.exists() {
+                    let _ = w.watch(&index, RecursiveMode::NonRecursive);
+                }
+                if refs.exists() {
+                    let _ = w.watch(&refs, RecursiveMode::Recursive);
+                }
+                if packed_refs.exists() {
+                    let _ = w.watch(&packed_refs, RecursiveMode::NonRecursive);
                 }
             }
             self.watcher = watcher;
@@ -368,15 +349,6 @@ impl Prompt {
         } else {
             false
         }
-    }
-
-    fn get_git_root_cached_only(&self) -> Option<String> {
-        for git_root in &self.git_root_cache {
-            if self.current_dir.starts_with(git_root) {
-                return Some(git_root.to_string());
-            }
-        }
-        None
     }
 
     pub fn current_path(&self) -> &Path {
@@ -398,30 +370,10 @@ impl Prompt {
             self.go_version_cache = None;
         }
 
-        let mut root_changed = false;
-        if let Some(git_root) = &self.current_git_root {
-            if !self.current_dir.starts_with(git_root) {
-                root_changed = true;
-            }
-        } else {
-            root_changed = true;
-        }
-
-        if root_changed {
-            if let Some(root) = self.get_git_root_cached_only() {
-                self.current_git_root = Some(PathBuf::from(&root));
-                self.git_status_cache = None;
-                self.needs_git_check = false;
-                self.start_watcher();
-            } else {
-                self.current_git_root = None;
-                self.needs_git_check = true;
-                self.watcher = None;
-                if let Some(sender) = &self.git_sender {
-                    let _ = sender.send(());
-                }
-            }
-        }
+        let root = crate::git_context::find_marker_root(path);
+        self.update_git_root(root);
+        self.needs_git_check = self.current_git_root.is_none();
+        self.trigger_git_check();
     }
 
     /// Refresh project type cache by checking file existence (called on chpwd only)
@@ -454,12 +406,13 @@ impl Prompt {
     }
 
     pub fn update_git_root(&mut self, root: Option<PathBuf>) {
-        self.current_git_root = root.clone();
-        if let Some(r) = root {
-            self.git_root_cache.insert(r.to_string_lossy().to_string());
-        }
         self.needs_git_check = false;
-        self.git_status_cache = None;
+        if self.current_git_root != root {
+            self.current_git_root = root;
+            self.git_status_cache = None;
+            self.watcher = None;
+            self.start_watcher();
+        }
     }
 
     pub fn invalidate_git_cache(&mut self) {
@@ -526,26 +479,7 @@ impl Prompt {
 
     pub(super) fn get_head_branch(&self) -> Option<String> {
         let git_root = self.current_git_root.as_ref()?;
-        let git_dir = git_root.join(".git");
-
-        // Resolve .git file (worktree/submodule)
-        let git_dir = if git_dir.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&git_dir) {
-                {
-                    let path = content.trim().strip_prefix("gitdir: ")?;
-                    git_root.join(path.trim())
-                }
-            } else {
-                return None;
-            }
-        } else {
-            git_dir
-        };
-
-        if !git_dir.exists() {
-            return None;
-        }
-
+        let git_dir = crate::git_context::git_dir_for_worktree(git_root)?;
         let head_path = git_dir.join("HEAD");
         if let Ok(head_content) = std::fs::read_to_string(head_path) {
             let content = head_content.trim();

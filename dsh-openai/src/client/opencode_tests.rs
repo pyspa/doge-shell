@@ -165,8 +165,8 @@ fn concurrent_clones_and_single_shot_calls_have_separate_session_ids() {
     }
     let ids = server.join().unwrap();
     use sha2::{Digest, Sha256};
-    assert_eq!(ids["a"], format!("{:x}", Sha256::digest(b"a")));
-    assert_eq!(ids["b"], format!("{:x}", Sha256::digest(b"b")));
+    assert_eq!(ids["a"], hex::encode(Sha256::digest(b"a")));
+    assert_eq!(ids["b"], hex::encode(Sha256::digest(b"b")));
 }
 
 #[test]

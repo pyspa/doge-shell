@@ -9,7 +9,13 @@ pub fn description() -> &'static str {
 }
 
 pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    let mut sys = System::new_all();
+    let mut sys = match System::new_all() {
+        Ok(system) => system,
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("dashboard: {err}"));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
     // Refresh twice for CPU usage accuracy on some systems, but once is usually okay for a quick look.
     sys.refresh_all();
 

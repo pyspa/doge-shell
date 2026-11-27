@@ -122,7 +122,9 @@ fn load_processes() -> Vec<CompletionCandidate> {
 fn load_processes() -> Vec<CompletionCandidate> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
-    let mut system = System::new();
+    let Ok(mut system) = System::new() else {
+        return Vec::new();
+    };
     system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
 
     system

@@ -12,7 +12,7 @@ impl ChatGptClient {
                 .session_id
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            request.opencode_session = Some(format!("{:x}", Sha256::digest(identity.as_bytes())));
+            request.opencode_session = Some(hex::encode(Sha256::digest(identity.as_bytes())));
         }
         Ok(request)
     }

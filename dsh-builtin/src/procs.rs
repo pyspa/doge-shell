@@ -35,11 +35,11 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new() -> Result<Self> {
         let mut app = Self {
             system: System::new_with_specifics(
                 RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
-            ),
+            )?,
             processes: Vec::new(),
             state: TableState::default(),
             filter: String::new(),
@@ -51,7 +51,7 @@ impl App {
         if !app.processes.is_empty() {
             app.state.select(Some(0));
         }
-        app
+        Ok(app)
     }
 
     fn refresh_processes(&mut self) {
@@ -148,6 +148,13 @@ impl App {
 }
 
 pub fn command(_ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
+    let mut app = match App::new() {
+        Ok(app) => app,
+        Err(err) => {
+            eprintln!("procs: {err}");
+            return ExitStatus::ExitedWith(1);
+        }
+    };
     // Setup terminal
     if let Err(err) = enable_raw_mode() {
         eprintln!("procs: failed to enable raw mode: {err}");
@@ -170,7 +177,6 @@ pub fn command(_ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) 
         }
     };
 
-    let mut app = App::new();
     let run_result = run_app(&mut terminal, &mut app);
 
     // Restore terminal

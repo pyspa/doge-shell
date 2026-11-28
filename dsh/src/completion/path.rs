@@ -129,13 +129,15 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
 }
 
 pub fn path_completion_prefix_strict(input: &str, only_dirs: bool) -> Result<Option<String>> {
-    path_completion_prefix_strict_with_context(input, only_dirs, None)
+    path_completion_prefix_strict_with_context(input, None, |path| {
+        !only_dirs || path.ends_with('/')
+    })
 }
 
 fn path_completion_prefix_strict_with_context(
     input: &str,
-    only_dirs: bool,
     context: Option<&FileSystemContext>,
+    eligible: impl Fn(&str) -> bool,
 ) -> Result<Option<String>> {
     let path = Path::new(input);
     // Path::parent("dir/") is empty. A trailing separator means list the
@@ -158,17 +160,15 @@ fn path_completion_prefix_strict_with_context(
             let Candidate::Path(path) = candidate else {
                 return None;
             };
-            if only_dirs && !path.ends_with(std::path::MAIN_SEPARATOR) {
-                return None;
-            }
-            if path.starts_with(input) {
+            let matched = if path.starts_with(input) {
                 Some(path.as_str())
             } else {
                 // A bare 'fo' is listed as './foo'; preserve the spelling that
                 // matched so the result can be appended to the user's input.
                 path.strip_prefix("./")
                     .filter(|path| path.starts_with(input))
-            }
+            }?;
+            eligible(matched).then_some(matched)
         })
         .min_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
 
@@ -179,6 +179,16 @@ pub(crate) fn path_completion_prefix_for_shell_token(
     raw_token: &str,
     only_dirs: bool,
     context: Option<&FileSystemContext>,
+) -> Result<Option<String>> {
+    path_completion_prefix_for_shell_token_filtered(raw_token, context, |path| {
+        !only_dirs || path.ends_with('/')
+    })
+}
+
+pub(crate) fn path_completion_prefix_for_shell_token_filtered(
+    raw_token: &str,
+    context: Option<&FileSystemContext>,
+    eligible: impl Fn(&str) -> bool,
 ) -> Result<Option<String>> {
     if raw_token.is_empty() {
         return Ok(None);
@@ -194,7 +204,7 @@ pub(crate) fn path_completion_prefix_for_shell_token(
     } else {
         normalized.clone()
     };
-    let Some(candidate) = path_completion_prefix_strict_with_context(&lookup, only_dirs, context)?
+    let Some(candidate) = path_completion_prefix_strict_with_context(&lookup, context, eligible)?
     else {
         return Ok(None);
     };

@@ -6,9 +6,7 @@
 //! entry point stay in this file; supporting types and free functions live
 //! in the sibling modules below.
 use super::cache::CompletionCache;
-use super::command::{
-    ArgumentType, CommandCompletionDatabase, CommandOption, CompletionCandidate, SubCommand,
-};
+use super::command::{ArgumentType, CommandCompletionDatabase, CommandOption, CompletionCandidate};
 use super::context::ContextCorrector;
 use super::dynamic::{CachePolicy, CompletionRuntime, DynamicCompletionProvider};
 
@@ -37,6 +35,8 @@ mod candidate;
 mod command_candidates;
 mod dynamic_dispatch;
 mod finalize;
+mod generic;
+pub(crate) use generic::GenericCompletion;
 mod ghost;
 mod git_directory;
 mod predicates;
@@ -600,9 +600,12 @@ impl IntegratedCompletionEngine {
         // 2. JSON-based command completion
         let command_batch = self.collect_command_candidates(&request, &parsed_command_line);
         timing.mark("json");
-        // Broad external and fish fallbacks do not know the JSON argument
-        // type. A directory slot is already covered by the typed collector.
-        if !aggregator.extend(command_batch) || self.directory_argument(&target) {
+        // Untyped providers cannot enforce a closed value set or a path filter.
+        let generic = self.generic_completion(&target);
+        if !aggregator.extend(command_batch)
+            || generic.owns_candidates()
+            || generic == GenericCompletion::Command
+        {
             let mut results = aggregator.finalize(history);
             timing.mark("finalize");
             results.replacement_range = replacement_range;

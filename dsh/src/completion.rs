@@ -22,6 +22,7 @@ pub mod generators;
 pub mod integrated;
 pub mod json_loader;
 pub mod parser;
+pub(crate) mod session_commands;
 pub(crate) mod shell_path;
 pub(crate) mod shell_token;
 pub(crate) mod subprocess;

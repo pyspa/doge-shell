@@ -95,8 +95,7 @@ pub(super) fn argument_type_for_completion_context(
         } => Some(arg_type.clone()),
         parser::CompletionContext::Argument { arg_index, .. } => {
             let command_completion = database.get_command(&parsed.command)?;
-            let arguments =
-                arguments_for_subcommand_path(command_completion, &parsed.subcommand_path);
+            let arguments = command_completion.arguments_for_path(&parsed.subcommand_path);
             resolve_argument_definition(arguments, *arg_index)
                 .and_then(|argument| argument.arg_type.clone())
         }
@@ -127,24 +126,6 @@ pub(super) fn argument_type_for_completion_context(
     }
 }
 
-pub(super) fn arguments_for_subcommand_path<'a>(
-    command_completion: &'a crate::completion::command::CommandCompletion,
-    path: &[String],
-) -> &'a [crate::completion::command::Argument] {
-    let mut arguments = &command_completion.arguments;
-    let mut subcommands = &command_completion.subcommands;
-
-    for name in path {
-        let Some(subcommand) = find_matching_subcommand(subcommands, name) else {
-            break;
-        };
-        arguments = &subcommand.arguments;
-        subcommands = &subcommand.subcommands;
-    }
-
-    arguments
-}
-
 pub(super) fn option_for_subcommand_path<'a>(
     command_completion: &'a crate::completion::command::CommandCompletion,
     path: &[String],
@@ -164,15 +145,6 @@ pub(super) fn resolve_argument_definition(
         arguments
             .last()
             .filter(|argument| argument.multiple && !arguments.is_empty())
-    })
-}
-
-pub(super) fn find_matching_subcommand<'a>(
-    subcommands: &'a [SubCommand],
-    name: &str,
-) -> Option<&'a SubCommand> {
-    subcommands.iter().find(|subcommand| {
-        subcommand.name == name || subcommand.aliases.iter().any(|alias| alias == name)
     })
 }
 

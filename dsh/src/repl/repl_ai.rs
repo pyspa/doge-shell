@@ -145,7 +145,11 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn inline_ai_pending(&self) -> bool {
-        self.automatic_suggestion_allowed() && self.ai_ui.suggestion_manager.engine.ai_pending()
+        self.automatic_suggestion_allowed()
+            && self.ai_ui.suggestion_manager.engine.ai_pending()
+            && super::completion::automatic_shell_region(
+                &self.state.logical_input(self.input.as_str()),
+            )
     }
 
     pub(crate) fn refresh_inline_suggestion(&mut self, allow_ai: bool) -> bool {
@@ -153,29 +157,36 @@ impl<'a> Repl<'a> {
         if self.has_forced_inline_suggestion() {
             return false;
         }
-        if !self.automatic_suggestion_allowed() {
+        let current_input = self.input.as_str();
+        let logical_input = self.state.logical_input(current_input);
+        if !self.automatic_suggestion_allowed()
+            || !super::completion::automatic_shell_region(&logical_input)
+        {
             let changed = self.input.completion.take().is_some()
                 || self.ai_ui.suggestion_manager.active.is_some();
             self.ai_ui.suggestion_manager.clear();
             return changed;
         }
 
-        let current_input = self.input.as_str();
-        let logical_input = self.state.logical_input(current_input);
         let completion_input = crate::parser::check::join_continued_lines(&logical_input);
-        let cursor_pos = self.input.cursor();
         let completion_cursor = completion_input.chars().count();
-        let history = self
-            .ai_ui
-            .suggestion_manager
-            .engine
-            .predict_history(current_input, cursor_pos, self.shell.cmd_history.as_ref())
-            .into_iter()
-            .next();
+        let history = &mut self.ai_ui.suggestion_manager.engine;
+        let history_ref = self.shell.cmd_history.as_ref();
+        let mut history_suffix = |prefix: &str| {
+            history
+                .predict_history(prefix, prefix.chars().count(), history_ref)
+                .into_iter()
+                .next()
+                .and_then(|state| state.full.strip_prefix(prefix).map(str::to_owned))
+        };
         let next = if current_input.is_empty() {
             None
-        } else if let Some(state) = history {
-            Some(state.full)
+        } else if let Some(suffix) = history_suffix(&logical_input).or_else(|| {
+            (completion_input != logical_input)
+                .then(|| history_suffix(&completion_input))
+                .flatten()
+        }) {
+            Some(format!("{current_input}{suffix}"))
         } else {
             let current_dir = self.terminal_ui.prompt.read().current_path().to_path_buf();
             let engine = &self.completion_ui.integrated_completion;
@@ -188,17 +199,27 @@ impl<'a> Repl<'a> {
                     self.shell.cmd_history.as_ref(),
                 )
                 .or_else(|| {
-                    let (filesystem, only_dirs) = engine.filesystem_context_for_input(
+                    let (filesystem, policy, token) = engine.filesystem_context_for_input(
                         &completion_input,
                         completion_cursor,
                         &current_dir,
                     )?;
+                    if policy == crate::completion::integrated::GenericCompletion::Command
+                        && let Some(full) = super::completion::session_command_suggestion(
+                            self.shell,
+                            &completion_input,
+                            token,
+                        )
+                    {
+                        return Some(full);
+                    }
                     super::completion::completion_suggestion(
                         &self.input,
                         &completion_input,
+                        token,
                         &self.shell.environment,
                         &filesystem,
-                        only_dirs,
+                        &policy,
                     )
                     .map(|suggestion| suggestion.full)
                 })
@@ -225,7 +246,8 @@ impl<'a> Repl<'a> {
         }
 
         let mut candidates = Vec::new();
-        let current_input = self.input.to_string();
+        let logical_input = self.state.logical_input(self.input.as_str());
+        let cursor_pos = logical_input.chars().count();
         let history_ref = self.shell.cmd_history.as_ref();
         // If no deterministic candidates are available, try AI with full context.
         //
@@ -250,7 +272,7 @@ impl<'a> Repl<'a> {
                 .suggestion_manager
                 .engine
                 .ai_suggestion_with_context(
-                    &current_input,
+                    &logical_input,
                     cursor_pos,
                     history_ref,
                     cwd,

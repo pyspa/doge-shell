@@ -6,12 +6,12 @@ use crate::completion::shell_path::decode_literal_word;
 
 impl IntegratedCompletionEngine {
     /// Share TAB's lookup context with the REPL's cheap path-only fallback.
-    pub(crate) fn filesystem_context_for_input(
+    pub(crate) fn filesystem_context_for_input<'a>(
         &self,
-        input: &str,
+        input: &'a str,
         cursor: usize,
         current_dir: &Path,
-    ) -> Option<(FileSystemContext, bool)> {
+    ) -> Option<(FileSystemContext, GenericCompletion, &'a str)> {
         let parsed = self.convert_to_parsed_command_line(input, cursor);
         if parsed
             .source
@@ -21,22 +21,20 @@ impl IntegratedCompletionEngine {
             return None;
         }
         let directory = self.completion_directory(&parsed, current_dir)?;
+        let target = self.dynamic_provider_target(&parsed);
+        let range = completion_replacement_range(input, cursor, &target)?;
+        let start = super::super::command_segment::char_to_byte(input, range.start);
+        let end = super::super::command_segment::char_to_byte(input, range.end);
         Some((
             self.filesystem_context(&directory),
-            self.directory_argument(&self.dynamic_provider_target(&parsed)),
+            self.generic_completion(&target),
+            &input[start..end],
         ))
     }
 
-    pub(crate) fn requires_directory(&self, input: &str, cursor: usize) -> bool {
+    pub(crate) fn generic_completion_at(&self, input: &str, cursor: usize) -> GenericCompletion {
         let parsed = self.convert_to_parsed_command_line(input, cursor);
-        self.directory_argument(&self.dynamic_provider_target(&parsed))
-    }
-
-    pub(super) fn directory_argument(&self, target: &ParsedCommandLine) -> bool {
-        matches!(
-            self.argument_type_for_completion_context(target),
-            Some(ArgumentType::Directory)
-        )
+        self.generic_completion(&self.dynamic_provider_target(&parsed))
     }
 
     pub(super) fn completion_directory<'a>(
@@ -52,12 +50,7 @@ impl IntegratedCompletionEngine {
             return Some(Cow::Borrowed(current_dir));
         };
         // Redirection is performed by the shell, before Git changes cwd.
-        if source
-            .cursor_word
-            .checked_sub(1)
-            .and_then(|index| source.words.get(index))
-            .is_some_and(|word| parser::CommandLineParser::is_redirect_operator(&word.raw))
-        {
+        if source.cursor_follows_redirect() {
             return Some(Cow::Borrowed(current_dir));
         }
         let db = self.command_completion.lock();

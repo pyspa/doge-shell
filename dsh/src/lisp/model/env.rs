@@ -57,6 +57,12 @@ impl Env {
         }
     }
 
+    pub(crate) fn exported_command_names(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().filter_map(|(name, value)| {
+            matches!(value, Value::Lambda(lambda) if lambda.export).then_some(name.0.as_str())
+        })
+    }
+
     /// Define a new key in the current environment
     pub fn define(&mut self, key: Symbol, value: Value) {
         self.entries.insert(key, value);

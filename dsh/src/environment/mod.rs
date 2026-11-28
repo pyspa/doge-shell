@@ -18,6 +18,7 @@ pub mod child_snapshot;
 mod mcp;
 mod path_ghost;
 mod paths;
+pub(crate) use paths::is_executable_file;
 mod preferences;
 mod stage_expansion;
 pub(crate) mod variables;

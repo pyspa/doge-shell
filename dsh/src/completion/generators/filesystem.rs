@@ -29,6 +29,10 @@ impl FileSystemContext {
         }
     }
 
+    pub(crate) fn current_dir(&self) -> &Path {
+        &self.current_dir
+    }
+
     pub(crate) fn lookup_directory(&self, dir: &str, home_expansion: bool) -> PathBuf {
         let expanded = if home_expansion {
             match &self.home {
@@ -245,7 +249,7 @@ fn lookup_directory(dir: &str, home_expansion: bool) -> String {
     }
 }
 
-fn normalize_extension_filters(extensions: &[String]) -> Vec<String> {
+pub(crate) fn normalize_extension_filters(extensions: &[String]) -> Vec<String> {
     extensions
         .iter()
         .map(|extension| extension.trim())
@@ -260,7 +264,7 @@ fn normalize_extension_filters(extensions: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn file_name_matches_extension_filters(file_name: &str, extensions: &[String]) -> bool {
+pub(crate) fn file_name_matches_extension_filters(file_name: &str, extensions: &[String]) -> bool {
     extensions
         .iter()
         .any(|extension| file_name.ends_with(extension))

@@ -464,8 +464,14 @@ impl<'a> Repl<'a> {
 
     pub(crate) fn inline_suggestion_suffix(&self) -> Option<&str> {
         self.completion_suffix().or_else(|| {
-            if self.automatic_suggestion_allowed() || self.has_forced_inline_suggestion() {
-                self.ai_ui.suggestion_manager.suffix(self.input.as_str())
+            if self.has_forced_inline_suggestion() {
+                self.ai_ui
+                    .suggestion_manager
+                    .suffix("", self.input.as_str())
+            } else if self.automatic_suggestion_allowed() {
+                self.ai_ui
+                    .suggestion_manager
+                    .suffix(&self.state.multiline_buffer, self.input.as_str())
             } else {
                 None
             }
@@ -478,13 +484,20 @@ impl<'a> Repl<'a> {
 
     pub(crate) fn accept_suggestion(&mut self, mode: SuggestionAcceptMode) -> bool {
         self.sync_input_preferences();
+        let logical_input = self.state.logical_input(self.input.as_str());
+        if !self.has_forced_inline_suggestion()
+            && !completion::automatic_shell_region(&logical_input)
+        {
+            return false;
+        }
         let Some(suffix) = self.inline_suggestion_suffix() else {
             return false;
         };
 
         let insert_chunk = match mode {
             SuggestionAcceptMode::Full => suffix.to_string(),
-            SuggestionAcceptMode::Word => match completion::next_word_chunk(suffix) {
+            SuggestionAcceptMode::Word => match completion::next_word_chunk(&logical_input, suffix)
+            {
                 Some(chunk) => chunk,
                 None => return false,
             },

@@ -1,11 +1,10 @@
 //! Legacy completion selection, request-scoped candidates, and Lisp adapters.
-use crate::completion::cache::CompletionCache;
-use crate::completion::commands::{deduplicate_candidates, get_commands};
 use crate::completion::display::{Candidate, CompletionConfig};
 use crate::completion::framework::{
     CompletionFrameworkKind, CompletionRequest, select_with_framework_kind,
 };
 use crate::completion::fuzzy::fuzzy_match_score;
+use crate::completion::integrated::GenericCompletion;
 use crate::completion::skim_adapter::replace_space;
 use crate::history::FrecencyHistory;
 use crate::input::Input;
@@ -13,20 +12,13 @@ use crate::lisp::Value;
 use crate::repl::Repl;
 use dsh_frecency::SortMethod;
 use skim::SkimItem;
-use std::collections::BTreeSet;
-use std::fs::read_dir;
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 mod command;
-
-const LEGACY_CACHE_TTL_MS: u64 = 3000;
-
-static LEGACY_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
-    LazyLock::new(|| CompletionCache::new(Duration::from_millis(LEGACY_CACHE_TTL_MS)));
+mod current;
+use current::{LegacyCompletionSnapshot, completion_from_current_with_prompt};
 
 // Helper function to get current prompt and input for completion display
 pub fn get_prompt_and_input_for_completion() -> (String, String) {
@@ -265,17 +257,30 @@ pub(crate) async fn input_completion_at(
         }
     }
 
-    // The integrated engine already queried directories. A settled empty
-    // result here must not broaden to arbitrary files or executables.
-    if repl
+    let cwd = repl.terminal_ui.prompt.read().current_path().to_path_buf();
+    let Some((filesystem, policy, _)) = repl
         .completion_ui
         .integrated_completion
-        .requires_directory(source, cursor)
-    {
+        .filesystem_context_for_input(source, cursor, &cwd)
+    else {
         return CompletionSelection::None;
-    }
-    let selection =
-        completion_from_current_with_prompt(repl, query, prompt_text, input_text, framework).await;
+    };
+    let command = match policy {
+        GenericCompletion::Files => false,
+        GenericCompletion::Command => true,
+        _ => return CompletionSelection::None,
+    };
+    let snapshot = LegacyCompletionSnapshot::capture(repl, filesystem.current_dir(), command);
+    let selection = completion_from_current_with_prompt(
+        repl,
+        &snapshot,
+        query,
+        raw_token,
+        prompt_text,
+        input_text,
+        framework,
+    )
+    .await;
     render_legacy_selection(selection, raw_token)
 }
 
@@ -347,12 +352,11 @@ async fn completion_from_lisp_with_prompt(
             _ => {}
         }
     } else if let Some(cmd) = &compl.cmd {
-        let Some(snapshot) = LegacyCompletionSnapshot::capture(repl) else {
-            return (CompletionSelection::None, false);
-        };
+        let cwd = repl.terminal_ui.prompt.read().current_path().to_path_buf();
+        let runtime = repl.shell.environment.read().command_runtime_snapshot(cwd);
         let res = command::complete_with_runtime(
             cmd.to_string(),
-            snapshot.runtime,
+            runtime,
             query,
             prompt_text,
             input_text,
@@ -510,279 +514,6 @@ fn z_history_candidates(
         return select_completion_items(candidates, query, prompt_text, input_text, framework);
     }
     CompletionSelection::None
-}
-
-async fn completion_from_current_with_prompt(
-    repl: &Repl<'_>,
-    query: Option<&str>,
-    prompt_text: &str,
-    input_text: &str,
-    framework: CompletionFrameworkKind,
-) -> CompletionSelection {
-    let Some(snapshot) = LegacyCompletionSnapshot::capture(repl) else {
-        return CompletionSelection::None;
-    };
-    let Some(data) =
-        cached_current_context_candidates(&snapshot, query.unwrap_or(""), &LEGACY_COMPLETION_CACHE)
-            .await
-    else {
-        return CompletionSelection::None;
-    };
-    select_completion_items(
-        data.items,
-        data.selection_query.as_deref(),
-        prompt_text,
-        input_text,
-        framework,
-    )
-}
-
-/// The cache identity and collection inputs come from the same logical state.
-/// This static cache also serves distinct Environment instances, so PATH's
-/// actual values are included alongside its per-Environment generation.
-struct LegacyCompletionSnapshot {
-    runtime: dsh_types::process_runtime::CommandRuntimeSnapshot,
-    home: Option<String>,
-    path_generation: u64,
-    system: Option<(
-        super::generator::SystemCommandCacheTicket,
-        Arc<super::dynamic::CompletionRuntime>,
-    )>,
-}
-
-impl LegacyCompletionSnapshot {
-    fn capture(repl: &Repl<'_>) -> Option<Self> {
-        let cwd = std::env::current_dir().ok()?;
-        let environment = repl.shell.environment.read();
-        let mut snapshot = Self::from_environment(&environment, cwd.clone());
-        let filesystem =
-            super::generators::filesystem::FileSystemContext::new(&cwd, snapshot.home.clone());
-        let ticket = super::generators::system::activate_system_command_cache_at(
-            &environment.variable_state.paths,
-            &filesystem,
-        );
-        snapshot.system = Some((ticket, repl.completion_ui.integrated_completion.runtime()));
-        Some(snapshot)
-    }
-
-    fn from_environment(environment: &crate::environment::Environment, cwd: PathBuf) -> Self {
-        Self {
-            runtime: environment.command_runtime_snapshot(cwd),
-            home: environment.lookup_variable("HOME"),
-            path_generation: environment.completion_state.path_generation,
-            system: None,
-        }
-    }
-
-    fn cache_scope(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut scope = std::collections::hash_map::DefaultHasher::new();
-        self.runtime.current_dir().hash(&mut scope);
-        self.home.hash(&mut scope);
-        self.runtime.command_search_paths().hash(&mut scope);
-        self.path_generation.hash(&mut scope);
-        if self.system.is_some() {
-            super::generators::system::system_command_cache_revision().hash(&mut scope);
-        }
-        scope.finish()
-    }
-
-    fn expand_home(&self, query: &str) -> String {
-        if (query == "~" || query.starts_with("~/"))
-            && let Some(home) = &self.home
-        {
-            format!("{home}{}", &query[1..])
-        } else {
-            // Logical unset is final: do not rediscover process-global HOME.
-            query.to_string()
-        }
-    }
-}
-
-async fn cached_current_context_candidates(
-    snapshot: &LegacyCompletionSnapshot,
-    query: &str,
-    cache: &CompletionCache<Candidate>,
-) -> Option<CurrentCompletionData> {
-    let scope = snapshot.cache_scope();
-    if let Some(hit) = cache.lookup_scoped(scope, query) {
-        return Some(CurrentCompletionData {
-            items: hit.candidates,
-            selection_query: Some(query.to_string()),
-        });
-    }
-    let data = collect_current_context_candidates(snapshot, query).await?;
-    if !data.items.is_empty() {
-        cache.set_scoped(scope, query.to_string(), data.items.clone());
-    }
-    Some(data)
-}
-
-#[derive(Debug, Clone)]
-struct CurrentCompletionData {
-    items: Vec<Candidate>,
-    selection_query: Option<String>,
-}
-
-async fn collect_current_context_candidates(
-    snapshot: &LegacyCompletionSnapshot,
-    query_str: &str,
-) -> Option<CurrentCompletionData> {
-    let current_dir = snapshot.runtime.current_dir();
-    let expanded = snapshot.expand_home(query_str);
-    let expanded_path = Path::new(&expanded);
-    let lookup_path = current_dir.join(expanded_path);
-
-    // Determine the path to search and query substring
-    let (search_path, path_query, only_path) = if !expanded.is_empty() && lookup_path.is_dir() {
-        (expanded_path.to_path_buf(), String::new(), true)
-    } else if let Some(parent) = expanded_path.parent() {
-        let parent_buf = parent.to_path_buf();
-        let has_parent = !parent_buf.as_os_str().is_empty();
-        if let Some(file_name) = expanded_path.file_name()
-            && let Some(file_name_str) = file_name.to_str()
-        {
-            (parent_buf, file_name_str.to_string(), has_parent)
-        } else {
-            (expanded_path.to_path_buf(), String::new(), has_parent)
-        }
-    } else {
-        (PathBuf::new(), query_str.to_string(), false)
-    };
-
-    // Canonicalize the path for consistent resolution
-    let lookup_dir = current_dir.join(&search_path);
-    let canonical_path = lookup_dir.canonicalize().unwrap_or(lookup_dir);
-    let canonical_str = canonical_path.display().to_string();
-    let search_path_str = search_path.to_str()?.to_string();
-
-    let mut items = if path_query.is_empty() {
-        get_file_completions(&canonical_str, &search_path_str).await
-    } else {
-        get_file_completions_with_filter(&canonical_str, &search_path_str, Some(&path_query)).await
-    };
-
-    if !only_path {
-        let query_str = query_str.to_string();
-
-        let mut command_items = if let Some((ticket, runtime)) = &snapshot.system {
-            super::generators::system::SystemCommandGenerator::from_activation(ticket.clone())
-                .generate_in_background(&query_str, runtime.clone(), usize::MAX)
-                .into_iter()
-                .map(|candidate| Candidate::Item(candidate.text, "(command)".into()))
-                .collect()
-        } else {
-            // Anchor relative/empty PATH entries before crossing the worker boundary.
-            let paths: Vec<String> = snapshot
-                .runtime
-                .command_search_paths()
-                .iter()
-                .map(|path| current_dir.join(path).to_string_lossy().into_owned())
-                .collect();
-            tokio::task::spawn_blocking(move || get_commands(&paths, &query_str))
-                .await
-                .unwrap_or_default()
-        };
-
-        items.append(&mut command_items);
-        items = deduplicate_candidates(items);
-    }
-
-    Some(CurrentCompletionData {
-        items,
-        selection_query: Some(path_query),
-    })
-}
-
-async fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
-    debug!("get_file_completions: dir={}, prefix={}", dir, prefix);
-    get_file_completions_with_filter(dir, prefix, None).await
-}
-
-async fn get_file_completions_with_filter(
-    dir: &str,
-    prefix: &str,
-    filter_prefix: Option<&str>,
-) -> Vec<Candidate> {
-    let dir_owned = dir.to_string();
-    let prefix_owned = prefix.to_string();
-    let filter_prefix_owned = filter_prefix.map(|s| s.to_string());
-
-    tokio::task::spawn_blocking(move || {
-        get_file_completions_with_filter_sync(
-            &dir_owned,
-            &prefix_owned,
-            filter_prefix_owned.as_deref(),
-        )
-    })
-    .await
-    .unwrap_or_default()
-}
-
-pub(super) fn get_file_completions_with_filter_sync(
-    dir: &str,
-    prefix: &str,
-    filter_prefix: Option<&str>,
-) -> Vec<Candidate> {
-    debug!(
-        "get_file_completions_with_filter: dir={}, prefix={}, filter_prefix={:?}",
-        dir, prefix, filter_prefix
-    );
-    let mut candidates_set = BTreeSet::new();
-    let prefix = if !prefix.is_empty() && !prefix.ends_with('/') {
-        format!("{prefix}/")
-    } else {
-        prefix.to_string()
-    };
-
-    debug!("reading directory: {}", dir);
-    match read_dir(dir) {
-        Ok(entries) => {
-            let mut entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
-            entries.sort_by_key(|x| x.file_name());
-
-            for entry in entries {
-                // Handle potential errors when getting file name
-                let file_name_os = entry.file_name();
-                let file_name = match file_name_os.to_str() {
-                    Some(name) => name,
-                    None => {
-                        // Skip entries with non-UTF-8 names
-                        continue;
-                    }
-                };
-
-                // Handle potential errors when getting file type
-                let is_file = match entry.file_type() {
-                    Ok(metadata) => metadata.is_file(),
-                    Err(_) => {
-                        // Skip entries where we can't determine file type
-                        continue;
-                    }
-                };
-
-                // Apply prefix filter if provided
-                if let Some(filter) = filter_prefix
-                    && fuzzy_match_score(file_name, filter).is_none()
-                {
-                    continue;
-                }
-
-                let candidate = if is_file {
-                    Candidate::Item(format!("{prefix}{file_name}"), "(file)".to_string())
-                } else {
-                    Candidate::Item(format!("{prefix}{file_name}"), "(directory)".to_string())
-                };
-
-                // BTreeSet automatically handles deduplication
-                candidates_set.insert(candidate);
-            }
-        }
-        Err(_err) => {}
-    }
-
-    // Convert BTreeSet back to Vec to maintain the expected return type
-    candidates_set.into_iter().collect()
 }
 
 use crate::completion::framework::CompletionSelection;

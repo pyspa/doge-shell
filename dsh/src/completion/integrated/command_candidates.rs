@@ -175,29 +175,16 @@ impl IntegratedCompletionEngine {
                     }
                 }
 
-                // Fallback if loading failed or returned nothing
-                let db_lock = self.command_completion.lock();
-                let completion_generator = CompletionGenerator::with_runtime_environment_ticket(
-                    &db_lock,
-                    &environment_names,
-                    system_command_ticket.clone(),
-                )
-                .with_filesystem_context(&filesystem)
-                .with_background_refresh(self.path_refresh_runtime());
-                if let Ok(candidates) = completion_generator
-                    .generate_fallback_candidates(&parsed_command_line.current_token)
-                {
-                    let enhanced_candidates = candidates
-                        .into_iter()
-                        .map(|c| self.convert_to_enhanced_candidate(c))
-                        .collect();
-                    CandidateBatch::inclusive_with_framework(
-                        enhanced_candidates,
-                        CompletionFrameworkKind::Skim,
-                    )
-                } else {
-                    CandidateBatch::empty()
+                if self.generic_completion(parsed_command_line) != GenericCompletion::Files {
+                    return CandidateBatch::empty();
                 }
+                CandidateBatch::inclusive_with_framework(
+                    self.file_candidates_for_token(
+                        &parsed_command_line.current_token,
+                        request.current_dir,
+                    ),
+                    CompletionFrameworkKind::Inline,
+                )
             }
             Err(e) => {
                 warn!("Failed to generate JSON completion candidates: {}", e);

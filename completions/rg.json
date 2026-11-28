@@ -176,14 +176,15 @@
     },
     {
       "long": "--color",
-      "description": "When to use color in output (always, never, auto).",
+      "description": "When to use color in output (always, never, auto, ansi).",
       "takes_value": true,
       "value_type": {
         "type": "Choice",
         "data": [
           "always",
           "never",
-          "auto"
+          "auto",
+          "ansi"
         ]
       }
     },

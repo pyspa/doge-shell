@@ -35,6 +35,16 @@ impl IntegratedCompletionEngine {
         parsed_command_line: &parser::ParsedCommandLine,
         cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
+        // Command-specific providers own arguments of an invocation, while
+        // argv0 is still being selected from the shell's command names.
+        if parsed_command_line.completion_context == parser::CompletionContext::Command
+            || parsed_command_line
+                .source
+                .as_ref()
+                .is_some_and(|source| source.cursor_follows_redirect())
+        {
+            return Vec::new();
+        }
         let mut candidates = DYNAMIC_PROVIDER_SPECS
             .iter()
             .find(|provider| provider.command == parsed_command_line.command)

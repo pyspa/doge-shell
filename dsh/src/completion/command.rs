@@ -51,6 +51,12 @@ impl CommandCompletion {
         })
     }
 
+    pub(crate) fn arguments_for_path(&self, path: &[String]) -> &[Argument] {
+        self.subcommands_on_path(path)
+            .last()
+            .map_or(self.arguments.as_slice(), |sub| sub.arguments.as_slice())
+    }
+
     pub(super) fn has_scoped_options_on_path(&self, path: &[String]) -> bool {
         self.global_options.iter().any(|opt| opt.inherit.is_some())
             || self

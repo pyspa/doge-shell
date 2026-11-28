@@ -31,7 +31,8 @@ fn cold_tab_borrows_pending_scan_and_invalidates_empty_result_on_publication() {
     started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
     env.read().set_path_ghost_notifier(notify_tx.clone());
-    let engine = IntegratedCompletionEngine::new(env.clone());
+    let mut engine = IntegratedCompletionEngine::new(env.clone());
+    engine.initialize_command_completion().unwrap();
     engine.set_notifier(notify_tx);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -640,11 +640,16 @@ original input and cursor. Editing a recalled command starts a new draft.
 ### Completion Selection
 
 At the prompt, Tab and Shift-Tab start completion at the cursor. Directory-only
-arguments such as `cd` and `git -C` offer directories.
+arguments such as `cd` and `git -C` offer directories. Options with a
+declared set of values, such as `rg --color`, complete from that set. At a
+command position, completion includes shell aliases, builtins, exported Lisp
+commands, and executable names on PATH.
 
 While a suggestion is visible at the end of the line, Right or Ctrl+F accepts
-the whole suffix and Ctrl+Right accepts the next word. Esc dismisses the
-suggestion until the next edit or an explicit completion request.
+the whole suffix and Ctrl+Right accepts the next shell word, including quoted
+or escaped spaces such as `space\ name.txt`. Esc dismisses the suggestion until
+the next edit or an explicit completion request. AI prompt text and shell
+comments suppress automatic suggestions.
 `(set-suggestion-mode 'off)` disables automatic suggestions. Tab and explicit
 AI actions are still available.
 
@@ -660,7 +665,7 @@ Esc/Ctrl-C cancels the helper; other input cancels it and returns to normal edit
 
 ### Fish Completion Fallback
 
-TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DOGESH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
+TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DOGESH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs in eligible argument and option positions with a timeout. Its results are cached and combined with built-in JSON and project-aware candidates. Command names and explicitly constrained values use their own candidate sources.
 
 Built-in dynamic providers also complete live resource identifiers for supported tools such as `gh`, `glab`, `argocd`, cloud CLIs, Vault, Nomad, Terraform/OpenTofu, rclone, and restic. They invoke only read-only listing commands, run off the prompt thread, use a five-second command timeout and a 30-second cache, and quietly return no candidates when a CLI is missing, unauthenticated, or unavailable. Provider diagnostics report cache age and errors but never include tokens, passwords, or fetched secret contents. Additional providers cover 1Password (`op item get/edit/delete`), Vagrant installed boxes (`vagrant box remove/repackage`, `vagrant init`), and `.envrc` files plus their containing directories discovered from the working directory chain for `direnv allow/deny/edit`.
 

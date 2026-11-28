@@ -116,6 +116,9 @@ impl<'a> Repl<'a> {
         if self.ai_ui.input_preferences.ai_explanation
             && self.ai_service().is_some()
             && !self.input.is_empty()
+            && super::completion::automatic_shell_region(
+                &self.state.logical_input(self.input.as_str()),
+            )
             && self.ai_ui.pending_ai_explanation_input.as_deref() != Some(self.input.as_str())
             && self.ai_ui.current_ai_explanation.is_none()
         {

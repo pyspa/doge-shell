@@ -1,5 +1,9 @@
 //! Legacy selection contracts and raw/preformatted insertion regressions.
+use super::current::*;
 use super::*;
+use crate::completion::cache::CompletionCache;
+use std::path::Path;
+use std::time::Duration;
 
 #[test]
 fn legacy_public_selection_changes_with_working_directory() {
@@ -23,6 +27,8 @@ fn legacy_public_selection_changes_with_working_directory() {
             std::env::set_current_dir(&dir).unwrap();
             let result = completion_from_current_with_prompt(
                 &repl,
+                &LegacyCompletionSnapshot::capture(&repl, &std::env::current_dir().unwrap(), false),
+                Some("legacy_public_scope_"),
                 Some("legacy_public_scope_"),
                 "",
                 "",
@@ -135,7 +141,7 @@ fn test_fuzzy_file_completion_with_temp_dir() {
     File::create(dir.path().join("notes.txt")).unwrap();
 
     // Test fuzzy match "cmp" -> should find completion.rs
-    let results = super::get_file_completions_with_filter_sync(dir_path, "", Some("cmp"));
+    let results = get_file_completions_with_filter_sync(dir_path, "", Some("cmp"));
     assert!(!results.is_empty());
     assert!(
         results
@@ -144,7 +150,7 @@ fn test_fuzzy_file_completion_with_temp_dir() {
     );
 
     // Test fuzzy match "cc" -> should find cache.rs (and maybe command.rs / completion.rs depending on score, but definitely cache.rs)
-    let results_cc = super::get_file_completions_with_filter_sync(dir_path, "", Some("cc"));
+    let results_cc = get_file_completions_with_filter_sync(dir_path, "", Some("cc"));
     assert!(!results_cc.is_empty());
     assert!(
         results_cc
@@ -153,7 +159,7 @@ fn test_fuzzy_file_completion_with_temp_dir() {
     );
 
     // Test no match
-    let results_none = super::get_file_completions_with_filter_sync(dir_path, "", Some("xyz"));
+    let results_none = get_file_completions_with_filter_sync(dir_path, "", Some("xyz"));
     assert!(results_none.is_empty());
 }
 
@@ -304,7 +310,7 @@ async fn legacy_cache_separates_paths_across_environments_with_equal_generations
         environment
             .write()
             .set_shell_var("HOME".into(), root.path().display().to_string());
-        let snapshot = legacy_test_snapshot(&environment.read(), root.path());
+        let snapshot = legacy_test_snapshot(&environment.read(), root.path()).for_command(true);
         generations.push(snapshot.path_generation);
         let data = cached_current_context_candidates(&snapshot, "legacy_command_", &cache)
             .await
@@ -315,7 +321,9 @@ async fn legacy_cache_separates_paths_across_environments_with_equal_generations
             .write()
             .set_shell_var("PATH".into(), bin.display().to_string());
         assert_ne!(
-            legacy_test_snapshot(&environment.read(), root.path()).cache_scope(),
+            legacy_test_snapshot(&environment.read(), root.path())
+                .for_command(true)
+                .cache_scope(),
             previous_scope
         );
     }
@@ -336,7 +344,7 @@ async fn legacy_relative_and_empty_path_entries_use_the_snapshot_cwd() {
     environment
         .write()
         .set_shell_var("PATH".into(), ":bin".into());
-    let snapshot = legacy_test_snapshot(&environment.read(), root.path());
+    let snapshot = legacy_test_snapshot(&environment.read(), root.path()).for_command(true);
     let data = collect_current_context_candidates(&snapshot, "legacy_")
         .await
         .unwrap();
@@ -344,6 +352,28 @@ async fn legacy_relative_and_empty_path_entries_use_the_snapshot_cwd() {
         assert!(data.items.iter().any(|candidate| {
             matches!(candidate, Candidate::Item(value, description) if value == name && description == "(command)")
         }));
+    }
+}
+
+#[tokio::test]
+async fn command_cache_can_cross_from_a_directory_name_into_an_executable_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("zzdir");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::create_dir(directory.join("subdir")).unwrap();
+    let executable = directory.join("zzrun");
+    std::fs::write(&executable, "").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let environment = crate::environment::Environment::new_synthetic();
+    let snapshot = legacy_test_snapshot(&environment.read(), root.path()).for_command(true);
+    let cache = CompletionCache::new(Duration::from_secs(3));
+    for (query, expected) in [("zzdir", "zzdir/subdir"), ("zzdir/zzr", "zzdir/zzrun")] {
+        let candidates = cached_current_context_candidates(&snapshot, query, &cache)
+            .await
+            .unwrap();
+        assert_eq!(legacy_candidate_names(candidates), vec![expected]);
     }
 }
 
@@ -407,10 +437,10 @@ async fn legacy_lisp_command_uses_the_logical_exported_environment() {
 }
 
 #[test]
-fn cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan() {
+fn cold_command_tab_keeps_directories_and_refreshes_after_shared_scan() {
     if crate::completion::isolation_tests::run_isolated(
         module_path!(),
-        "cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan",
+        "cold_command_tab_keeps_directories_and_refreshes_after_shared_scan",
     ) {
         return;
     }
@@ -418,6 +448,7 @@ fn cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan() {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
+    std::fs::create_dir(dir.path().join("zz-cold-dir")).unwrap();
     std::fs::write(dir.path().join("zz-cold-file"), "").unwrap();
     let env = crate::environment::Environment::new_synthetic();
     {
@@ -442,7 +473,8 @@ fn cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan() {
         &env.read().variable_state.paths,
         &filesystem,
     );
-    let mut snapshot = LegacyCompletionSnapshot::from_environment(&env.read(), dir.path().into());
+    let mut snapshot = LegacyCompletionSnapshot::from_environment(&env.read(), dir.path().into())
+        .for_command(true);
     snapshot.system = Some((
         ticket,
         Arc::new(super::super::dynamic::CompletionRuntime::new()),
@@ -466,10 +498,16 @@ fn cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan() {
     worker.join().unwrap();
     for result in [first, second] {
         assert!(
-            result
+            !result
                 .items
                 .iter()
                 .any(|item| item.output() == "zz-cold-file")
+        );
+        assert!(
+            result
+                .items
+                .iter()
+                .any(|item| item.output() == "zz-cold-dir")
         );
         assert!(
             !result
@@ -493,7 +531,7 @@ fn cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan() {
         ready
             .items
             .iter()
-            .any(|item| item.output() == "zz-cold-file")
+            .any(|item| item.output() == "zz-cold-dir")
     );
 }
 

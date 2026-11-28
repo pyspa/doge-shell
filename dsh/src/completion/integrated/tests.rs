@@ -3439,7 +3439,7 @@ esac
 }
 
 #[tokio::test]
-async fn directory_slots_stop_before_untyped_external_fallback() {
+async fn constrained_slots_stop_before_untyped_external_fallback() {
     let mut engine = IntegratedCompletionEngine::new(Environment::new_synthetic());
     engine.initialize_command_completion().unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -3448,8 +3448,20 @@ async fn directory_slots_stop_before_untyped_external_fallback() {
         "printf 'zz-only-external\\n'".into(),
     );
     let generation = engine.dynamic.refresh_generation();
-    for input in ["cd zz-only", "git -C zz-only", "sudo git -C zz-only"] {
-        assert!(engine.requires_directory(input, input.len()), "{input}");
+    for (input, policy) in [
+        ("cd zz-only", GenericCompletion::Directory),
+        ("git -C zz-only", GenericCompletion::Directory),
+        ("sudo git -C zz-only", GenericCompletion::Directory),
+        ("rg --color zz-only", GenericCompletion::DeclaredValues),
+        ("head -n zz-only", GenericCompletion::DeclaredValues),
+        ("zz-only", GenericCompletion::Command),
+        ("./zz-only", GenericCompletion::Command),
+    ] {
+        assert_eq!(
+            engine.generic_completion_at(input, input.len()),
+            policy,
+            "{input}"
+        );
         let result = engine
             .complete(input, input.len(), dir.path(), 20, None)
             .await;

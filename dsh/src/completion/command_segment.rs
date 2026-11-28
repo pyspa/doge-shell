@@ -38,6 +38,13 @@ impl CommandSource {
             })
     }
 
+    pub(crate) fn cursor_follows_redirect(&self) -> bool {
+        self.cursor_word
+            .checked_sub(1)
+            .and_then(|index| self.words.get(index))
+            .is_some_and(|word| super::parser::CommandLineParser::is_redirect_operator(&word.raw))
+    }
+
     pub(crate) fn raw_index(&self, raw_len: usize) -> Option<usize> {
         self.cursor_word
             .checked_sub(self.words.len().saturating_sub(raw_len))

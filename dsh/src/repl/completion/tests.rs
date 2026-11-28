@@ -23,6 +23,22 @@ fn file_context(input: &str, environment: &Arc<RwLock<Environment>>) -> FileSyst
         .0
 }
 
+fn fallback_suggestion(
+    input_state: &Input,
+    input: &str,
+    environment: &Arc<RwLock<Environment>>,
+) -> Option<SuggestionState> {
+    let mut engine =
+        crate::completion::integrated::IntegratedCompletionEngine::new(environment.clone());
+    engine.initialize_command_completion().unwrap();
+    let (filesystem, policy, token) = engine.filesystem_context_for_input(
+        input,
+        input.chars().count(),
+        &std::env::current_dir().unwrap(),
+    )?;
+    completion_suggestion(input_state, input, token, environment, &filesystem, &policy)
+}
+
 #[test]
 fn git_path_ghost_uses_the_same_directory_as_tab() {
     let dir = tempfile::tempdir().unwrap();
@@ -30,13 +46,7 @@ fn git_path_ghost_uses_the_same_directory_as_tab() {
     let input = format!("git -C {} checkout audit_ghost_", dir.path().display());
     let state = completion_input(&input);
     let environment = Environment::new_isolated();
-    let suggestion = completion_suggestion(
-        &state,
-        &input,
-        &environment,
-        &file_context(&input, &environment),
-        false,
-    );
+    let suggestion = fallback_suggestion(&state, &input, &environment);
     assert_eq!(suggestion.map(|s| s.full), Some(format!("{input}target")));
 }
 
@@ -50,13 +60,7 @@ fn path_ghost_completes_the_last_word_after_a_multibyte_word() {
     let input = format!("cat {multibyte} {}/audit_mb_", dir.path().display());
     let state = completion_input(&input);
     let environment = Environment::new_isolated();
-    let suggestion = completion_suggestion(
-        &state,
-        &input,
-        &environment,
-        &file_context(&input, &environment),
-        false,
-    );
+    let suggestion = fallback_suggestion(&state, &input, &environment);
     assert_eq!(suggestion.map(|s| s.full), Some(format!("{input}target")));
 }
 
@@ -73,13 +77,7 @@ fn path_suggestion_follows_logical_home_changes() {
         environment
             .write()
             .set_shell_var("HOME".into(), home.display().to_string());
-        let suggestion = completion_suggestion(
-            &state,
-            input,
-            &environment,
-            &file_context(input, &environment),
-            false,
-        );
+        let suggestion = fallback_suggestion(&state, input, &environment);
         assert_eq!(
             suggestion.map(|s| s.full),
             Some(format!("cat ~/audit_{name}.txt"))
@@ -135,10 +133,13 @@ fn test_mcp_form_completion() {
 #[test]
 fn test_next_word_chunk() {
     // Normal word
-    assert_eq!(next_word_chunk("hello world"), Some("hello ".to_string()));
+    assert_eq!(
+        next_word_chunk("", "hello world"),
+        Some("hello ".to_string())
+    );
 
     // With whitespace
-    assert_eq!(next_word_chunk("  hello"), Some("  hello".to_string()));
+    assert_eq!(next_word_chunk("", "  hello"), Some("  hello".to_string()));
 
     // Trailing whitespace included if it's part of the first "chunk" logic?
     // Implementation: loop chars. if whitespace: if in_word break.
@@ -152,15 +153,15 @@ fn test_next_word_chunk() {
     // So it grabs leading whitespace + word.
 
     assert_eq!(
-        next_word_chunk("  hello world"),
+        next_word_chunk("", "  hello world"),
         Some("  hello ".to_string())
     );
 
     // Single word
-    assert_eq!(next_word_chunk("hello"), Some("hello".to_string()));
+    assert_eq!(next_word_chunk("", "hello"), Some("hello".to_string()));
 
     // Empty
-    assert_eq!(next_word_chunk(""), None);
+    assert_eq!(next_word_chunk("", ""), None);
 }
 
 #[test]
@@ -247,14 +248,7 @@ fn test_command_path_completion_preserves_escaped_style() {
     let input_state = completion_input(&input);
     let environment = Environment::new();
 
-    let suggestion = completion_suggestion(
-        &input_state,
-        &input,
-        &environment,
-        &file_context(&input, &environment),
-        false,
-    )
-    .unwrap();
+    let suggestion = fallback_suggestion(&input_state, &input, &environment).unwrap();
 
     assert_eq!(suggestion.full, expected);
     assert_eq!(suggestion.source, SuggestionSource::Completion);
@@ -295,13 +289,7 @@ fn test_command_path_completion_keeps_directory_only_policy() {
     let environment = Environment::new();
 
     assert_eq!(
-        completion_suggestion(
-            &input_state,
-            &input,
-            &environment,
-            &file_context(&input, &environment),
-            false,
-        ),
+        fallback_suggestion(&input_state, &input, &environment),
         None
     );
 }
@@ -315,14 +303,7 @@ fn test_command_prefix_completion_still_uses_environment_first() {
         .write()
         .set_executable_names(vec!["zz-test-command".to_string()]);
 
-    let suggestion = completion_suggestion(
-        &input_state,
-        input,
-        &environment,
-        &file_context(input, &environment),
-        false,
-    )
-    .unwrap();
+    let suggestion = fallback_suggestion(&input_state, input, &environment).unwrap();
 
     assert_eq!(suggestion.full, "zz-test-command");
     assert_eq!(suggestion.source, SuggestionSource::Completion);
@@ -351,13 +332,7 @@ fn fallback_completion_extends_only_a_literal_command_at_line_end() {
         ("echo a && $VAR'audit-sp'", None),
     ] {
         let state = completion_input(input);
-        let suggestion = completion_suggestion(
-            &state,
-            input,
-            &environment,
-            &file_context(input, &environment),
-            false,
-        );
+        let suggestion = fallback_suggestion(&state, input, &environment);
         assert_eq!(
             suggestion.as_ref().map(|s| s.full.as_str()),
             expected,

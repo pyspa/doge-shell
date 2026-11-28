@@ -220,11 +220,11 @@ impl CommandLineParser {
             &source_input[command_start..],
             local_cursor.saturating_sub(command_start),
         );
-        if redirect_target && cursor_token_index < command_word {
+        if redirect_target {
             parsed.current_token = current_token.clone();
             parsed.current_arg = Some(current_token);
             parsed.completion_context = CompletionContext::Argument {
-                arg_index: 0,
+                arg_index: parsed.specified_arguments.len(),
                 arg_type: Some(ArgumentType::File { extensions: None }),
             };
         }

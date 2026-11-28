@@ -357,11 +357,13 @@ async fn complete_shell_input(
     }
 
     if !completion_handled {
-        // Preserve the existing explicit-Tab suggestion acceptance fallback.
-        if !repl
+        // An unrestricted argument can still use the inline suggestion.
+        // Command positions and typed slots use their own selected candidates.
+        if repl
             .completion_ui
             .integrated_completion
-            .requires_directory(source, cursor)
+            .generic_completion_at(source, cursor)
+            == completion::integrated::GenericCompletion::Files
             && repl.accept_suggestion(SuggestionAcceptMode::Word)
         {
             debug!("No standard completion, accepted suggestion word fallback");

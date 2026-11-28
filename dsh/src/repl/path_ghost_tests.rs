@@ -117,3 +117,48 @@ async fn suggestion_mode_off_does_not_request_ai_backfill() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(repl.inline_suggestion_suffix(), Some("ai"));
 }
+
+#[tokio::test]
+async fn ai_backfill_uses_the_logical_input_and_skips_opaque_regions() {
+    let env = Environment::new_synthetic();
+    env.write().completion_state.input_preferences.ai_backfill = true;
+    let mut shell = crate::shell::Shell::new(env);
+    let mut repl = Repl::new(&mut shell);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    repl.ai_ui
+        .suggestion_manager
+        .engine
+        .set_ai_backend(Some(Arc::new(CountAi(calls.clone()))));
+    repl.ai_ui.last_input_change_time = Instant::now() - Duration::from_secs(1);
+
+    for input in [
+        "! describe names",
+        "!& describe names",
+        "?? describe names",
+        "echo ok |? describe names",
+        "echo ok |! describe names",
+        "echo ok # describe names",
+        "echo ok 2>&",
+    ] {
+        repl.input.reset(input.into());
+        repl.refresh_inline_suggestion(true);
+        assert_eq!(repl.inline_suggestion_suffix(), None, "{input}");
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let line = "zz-no-local-autosuggestion";
+    repl.state.multiline_buffer = "echo \\\n".into();
+    repl.input.reset(line.into());
+    repl.refresh_inline_suggestion(true);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(repl.inline_suggestion_suffix(), Some("ai"));
+
+    repl.state.multiline_buffer = "cat \\\n".into();
+    repl.refresh_inline_suggestion(false);
+    assert_eq!(repl.inline_suggestion_suffix(), None);
+
+    repl.state.multiline_buffer = "echo ok |? \\\n".into();
+    repl.refresh_inline_suggestion(true);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(repl.inline_suggestion_suffix(), None);
+}

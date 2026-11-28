@@ -127,7 +127,7 @@ impl ContextCorrector<'_> {
         parsed: &ParsedCommandLine,
     ) -> Option<(usize, String)> {
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
-            let args_def = &command_completion.arguments;
+            let args_def = command_completion.arguments_for_path(&parsed.subcommand_path);
             for (i, arg_val) in parsed.specified_arguments.iter().enumerate() {
                 if let Some(arg_def) = args_def.get(i)
                     && let Some(ArgumentType::CommandWithArgs) = arg_def.arg_type

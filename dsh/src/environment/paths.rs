@@ -20,7 +20,7 @@ fn explicit_command_file(cmd: &str) -> Option<String> {
     (path.exists() && path.is_file()).then(|| cmd.to_string())
 }
 
-fn is_executable_file(path: &Path) -> bool {
+pub(crate) fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };

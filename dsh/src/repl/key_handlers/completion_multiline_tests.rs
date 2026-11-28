@@ -345,3 +345,188 @@ async fn directory_arguments_do_not_fall_back_to_regular_files() {
     repl.print_input(&mut Vec::new(), false, true);
     assert!(repl.inline_suggestion_suffix().is_none());
 }
+
+#[tokio::test]
+async fn completion_respects_declared_values_and_command_position() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = tempfile::tempdir().unwrap();
+    let cwd = fixture.path();
+    let bin = cwd.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::write(cwd.join("zzunique.txt"), "").unwrap();
+    std::fs::write(cwd.join("valid-only.py"), "").unwrap();
+    std::fs::write(cwd.join("-probe.txt"), "").unwrap();
+    for executable in [bin.join("zzlookup-ok"), cwd.join("zzrun-ok")] {
+        std::fs::write(&executable, "").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut shell = fixture_shell();
+    {
+        let mut environment = shell.environment.write();
+        environment.variable_state.paths = vec![bin.display().to_string()];
+        environment.set_executable_names(vec!["zzlookup-ok".into()]);
+        environment
+            .variable_state
+            .alias
+            .insert("zzalias-ok".into(), "echo".into());
+    }
+    let mut repl = Repl::new(&mut shell);
+    repl.completion_ui
+        .integrated_completion
+        .initialize_command_completion()
+        .unwrap();
+    repl.terminal_ui.prompt.write().set_current(cwd);
+    for key in [KeyCode::Tab, KeyCode::Right] {
+        for (input, expected) in [
+            ("rg --color ans", "rg --color ansi"),
+            ("rg --color=ans", "rg --color=ansi"),
+            ("rg --color zzuniq", "rg --color zzuniq"),
+            ("head -n zzuniq", "head -n zzuniq"),
+            ("python zzuniq", "python zzuniq"),
+            (r#"python "valid-on"#, r#"python "valid-only.py"#),
+            ("cat zzuniq", "cat zzunique.txt"),
+            ("cat zzlookup-o", "cat zzlookup-o"),
+            ("undocumented-cmd zzlookup-o", "undocumented-cmd zzlookup-o"),
+            ("undocumented-cmd zzuniq", "undocumented-cmd zzunique.txt"),
+            ("zzlookup-o", "zzlookup-ok"),
+            ("zzuniq", "zzuniq"),
+            ("echo ok | zzuniq", "echo ok | zzuniq"),
+            ("./zzrun-o", "./zzrun-ok"),
+            ("./zzuniq", "./zzuniq"),
+            ("sudo ./zzrun-o", "sudo ./zzrun-ok"),
+            ("sudo ./zzuniq", "sudo ./zzuniq"),
+            ("sudo zzlookup-o", "sudo zzlookup-ok"),
+            ("sudo zzalias-o", "sudo zzalias-o"),
+            (
+                "snippet add audit cat zzuniq",
+                "snippet add audit cat zzunique.txt",
+            ),
+            ("zzalias-o", "zzalias-ok"),
+            ("chat_tas", "chat_task"),
+            ("head -n 1 > zzuniq", "head -n 1 > zzunique.txt"),
+        ] {
+            repl.input.reset(input.into());
+            repl.print_input(&mut Vec::new(), false, true);
+            repl.handle_key_event(&KeyEvent::new(key, KeyModifiers::NONE))
+                .await
+                .unwrap();
+            assert_eq!(repl.input.as_str(), expected, "{key:?}, {input}");
+            assert_eq!(
+                repl.input.cursor(),
+                expected.chars().count(),
+                "{key:?}, {input}"
+            );
+        }
+    }
+
+    repl.input.reset("echo ok | zzalias-old tail".into());
+    repl.input.move_to("echo ok | zzalias-o".chars().count());
+    handle_trigger_completion(&mut repl).await.unwrap();
+    assert_eq!(repl.input.as_str(), "echo ok | zzalias-ok tail");
+    repl.input.reset("undocumented-cmd > -pro".into());
+    handle_trigger_completion(&mut repl).await.unwrap();
+    assert_eq!(repl.input.as_str(), "undocumented-cmd > ./-probe.txt");
+
+    let mut history = crate::history::History::new();
+    history
+        .write_batch(vec![("zzunique.txt".into(), 1)])
+        .unwrap();
+    repl.shell.cmd_history = Some(std::sync::Arc::new(parking_lot::Mutex::new(history)));
+    repl.input.reset("zzuniq".into());
+    repl.print_input(&mut Vec::new(), false, true);
+    assert_eq!(repl.inline_suggestion_suffix(), Some("ue.txt"));
+    handle_trigger_completion(&mut repl).await.unwrap();
+    assert_eq!(repl.input.as_str(), "zzuniq");
+}
+
+#[tokio::test]
+async fn automatic_completion_respects_input_regions_and_history_context() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let fixture = tempfile::tempdir().unwrap();
+    std::fs::write(fixture.path().join("zzunique.txt"), "").unwrap();
+    std::fs::write(fixture.path().join("space name.txt"), "").unwrap();
+    let mut shell = fixture_shell();
+    let mut history = crate::history::History::new();
+    history
+        .write_batch(vec![
+            ("echo ok # sample more".into(), 1),
+            ("state-probe argument".into(), 2),
+            ("echo ok 2>&1".into(), 4),
+            ("echo \"sample file one\" next".into(), 3),
+        ])
+        .unwrap();
+    shell.cmd_history = Some(std::sync::Arc::new(parking_lot::Mutex::new(history)));
+    let mut repl = Repl::new(&mut shell);
+    repl.completion_ui
+        .integrated_completion
+        .initialize_command_completion()
+        .unwrap();
+    repl.terminal_ui.prompt.write().set_current(fixture.path());
+    for (prefix, input, modifiers, expected) in [
+        (
+            "",
+            "! describe zzuniq",
+            KeyModifiers::NONE,
+            "! describe zzuniq",
+        ),
+        (
+            "",
+            "!& describe zzuniq",
+            KeyModifiers::NONE,
+            "!& describe zzuniq",
+        ),
+        (
+            "",
+            "?? describe zzuniq",
+            KeyModifiers::NONE,
+            "?? describe zzuniq",
+        ),
+        (
+            "",
+            "echo ok |? describe zzuniq",
+            KeyModifiers::NONE,
+            "echo ok |? describe zzuniq",
+        ),
+        (
+            "",
+            "echo ok |! describe zzuniq",
+            KeyModifiers::NONE,
+            "echo ok |! describe zzuniq",
+        ),
+        (
+            "",
+            "echo ok # sample",
+            KeyModifiers::NONE,
+            "echo ok # sample",
+        ),
+        ("", "echo ok 2>&", KeyModifiers::NONE, "echo ok 2>&"),
+        ("", "echo mcp-cle", KeyModifiers::NONE, "echo mcp-cle"),
+        ("", "(mcp-cle", KeyModifiers::NONE, "(mcp-clear"),
+        (
+            "",
+            "echo \"??\" zzuniq",
+            KeyModifiers::NONE,
+            "echo \"??\" zzunique.txt",
+        ),
+        ("git \\\n", "sta", KeyModifiers::NONE, "stash"),
+        ("", "cat spa", KeyModifiers::CONTROL, r"cat space\ name.txt"),
+        (
+            "",
+            "echo \"sample",
+            KeyModifiers::CONTROL,
+            "echo \"sample file one\" ",
+        ),
+    ] {
+        repl.state.multiline_buffer = prefix.into();
+        repl.input.reset(input.into());
+        repl.print_input(&mut Vec::new(), false, true);
+        repl.handle_key_event(&KeyEvent::new(KeyCode::Right, modifiers))
+            .await
+            .unwrap();
+        assert_eq!(repl.input.as_str(), expected, "{prefix:?}, {input}");
+        assert_eq!(repl.state.multiline_buffer, prefix);
+    }
+}

@@ -10,9 +10,9 @@ use super::*;
 
 const AI_SUGGESTION_SYSTEM_PROMPT: &str = r#"You are an inline completion engine for the doge-shell terminal.
 Given a user's partially typed command and context (history, current directory, files, OS), propose the most accurate continuation possible.
-Output ONLY a single line containing the completed command.
-- Start with the exact user input.
-- Append only the minimal additional characters to form a plausible command.
+Output ONLY the completed command.
+- Start with the exact user input, including any existing line breaks.
+- Append only the minimal additional characters on the final line to form a plausible command.
 - If history matches, prioritize it unless current context (files) suggests it is invalid.
 - If the last command failed (exit code != 0), consider suggesting a correction if the input seems related to fixing it.
 - No commentary, no explanations, no code fences, no markdown.
@@ -324,21 +324,11 @@ impl AiSuggestionBackend {
             return Some(content);
         }
 
-        let normalized = sanitize_model_output(&content);
-        if normalized.is_empty() {
-            return None;
+        let completion = completion_preserving_prefix(&content, &request.input);
+        if completion.is_none() {
+            debug!("ai suggestion backend discarded response that did not preserve prefix");
         }
-
-        if normalized.starts_with(&request.input) {
-            // Allow returning exact input if explicitly requested (by prompt) to stop polling
-            // but here we are in fetch_completion.
-            // If normalized == input, it means AI returned input.
-            // We return it so `predict` logic can decide what to do (currently it accepts it)
-            return Some(normalized);
-        }
-
-        debug!("ai suggestion backend discarded response that did not preserve prefix");
-        None
+        completion
     }
 
     fn build_messages(&self, request: &SuggestionRequest) -> Vec<Value> {
@@ -440,6 +430,36 @@ fn suggestion_mode_label(mode: SuggestionMode) -> &'static str {
     match mode {
         SuggestionMode::Off => "off",
         SuggestionMode::Ghost => "ghost",
+    }
+}
+
+fn completion_preserving_prefix(raw: &str, input: &str) -> Option<String> {
+    if let Some(tail) = raw.strip_prefix(input) {
+        let suffix = tail.split(['\r', '\n']).next().unwrap_or_default();
+        return Some(format!("{input}{suffix}"));
+    }
+    // Accept ordinary fenced or quoted one-line replies from older models.
+    let normalized = sanitize_model_output(raw);
+    normalized.starts_with(input).then_some(normalized)
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::completion_preserving_prefix;
+
+    #[test]
+    fn multiline_completion_preserves_physical_prefix_and_uses_one_suffix_line() {
+        let input = "echo \\\npar";
+        let raw = format!("{input}tial\nother command");
+        assert_eq!(
+            completion_preserving_prefix(&raw, input),
+            Some(format!("{input}tial"))
+        );
+        assert_eq!(completion_preserving_prefix("echo partial", input), None);
+        assert_eq!(
+            completion_preserving_prefix("echo partial", "echo par"),
+            Some("echo partial".to_owned())
+        );
     }
 }
 

@@ -278,6 +278,37 @@ impl<'a> ArgumentGenerator<'a> {
             .unwrap_or_default())
     }
 
+    fn generate_executable_candidates(
+        &self,
+        parsed: &ParsedCommandLine,
+    ) -> Result<Vec<CompletionCandidate>> {
+        let query = parsed.completion_query();
+        let Some(filesystem) = self.filesystem.filter(|_| query.contains('/')) else {
+            return self.generate_system_command_candidates(&query);
+        };
+        let raw = &parsed.current_token;
+        let mut candidates = FileSystemGenerator::file_candidates(raw, None, Some(filesystem))?;
+        candidates.retain(|candidate| {
+            matches!(
+                candidate.completion_type,
+                crate::completion::command::CompletionType::Directory
+                    | crate::completion::command::CompletionType::HomeDirectory
+            ) || crate::environment::is_executable_file(
+                &filesystem.lookup_directory(&candidate.text, raw.starts_with("~/")),
+            )
+        });
+        // The filesystem generator renders "." paths as bare names. In an
+        // executable slot "./" explicitly bypasses PATH, so keep that spelling.
+        if query.starts_with("./") {
+            for candidate in &mut candidates {
+                if !candidate.text.starts_with("./") {
+                    candidate.text.insert_str(0, "./");
+                }
+            }
+        }
+        Ok(candidates)
+    }
+
     /// Generate completion candidates based on type
     pub fn generate_candidates_for_type(
         &self,
@@ -308,7 +339,9 @@ impl<'a> ArgumentGenerator<'a> {
                     .map(|choice| CompletionCandidate::argument(choice.clone(), None))
                     .collect())
             }
-            ArgumentType::Command => self.generate_system_command_candidates(&query),
+            ArgumentType::Command | ArgumentType::CommandWithArgs => {
+                self.generate_executable_candidates(parsed)
+            }
             ArgumentType::Environment => {
                 let mut candidates = Vec::with_capacity(32);
                 for key in self.environment_names {
@@ -323,7 +356,6 @@ impl<'a> ArgumentGenerator<'a> {
             }
             ArgumentType::Dynamic { .. } => Ok(Vec::new()),
             ArgumentType::Process => ProcessGenerator::new().generate_candidates(&query),
-            ArgumentType::CommandWithArgs => self.generate_system_command_candidates(&query),
             ArgumentType::User => UserGenerator::new().generate_candidates(&query),
             ArgumentType::Group => GroupGenerator::new().generate_candidates(&query),
             ArgumentType::Signal => SignalGenerator::new().generate_candidates(&query),
